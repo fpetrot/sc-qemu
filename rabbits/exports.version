@@ -1,0 +1,8 @@
+FOO {
+  global:
+    sc_qemu_init;
+    sc_qemu_irq_update;
+    sc_qemu_cpu_loop;
+    sc_qemu_add_map;
+  local: *;
+};

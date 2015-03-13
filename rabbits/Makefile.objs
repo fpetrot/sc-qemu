@@ -1,0 +1,2 @@
+obj-y += sc_qemu.o
+obj-y += sc_machine.o

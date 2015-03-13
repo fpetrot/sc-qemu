@@ -62,10 +62,24 @@ expand-objs = $(strip $(sort $(filter %.o,$1)) \
 # must link with the C++ compiler, not the plain C compiler.
 LINKPROG = $(or $(CXX),$(CC))
 
+so_name_flag=-Wl,-soname,$2
+version_script_flag=-Wl,--version-script=$3
+whole_archive_flag=
+no_whole_archive_flag=
+
 ifeq ($(LIBTOOL),)
 LINK = $(call quiet-command, $(LINKPROG) $(QEMU_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ \
        $(call process-archive-undefs, $1) \
        $(version-obj-y) $(call extract-libs,$1) $(LIBS),"  LINK  $(TARGET_DIR)$@")
+SO_LINK = $(call quiet-command, $(LINKPROG) $(QEMU_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ \
+	  -shared \
+	  $(so_name_flag) \
+	  $(version_script_flag) \
+	  $(whole_archive_flag) \
+	  $(call process-archive-undefs, $1) \
+	  $(version-obj-y) \
+	  $(no_whole_archive_flag) \
+	  $(call extract-libs,$1) $(LIBS),"  LINK  $(TARGET_DIR)$@")
 else
 LIBTOOL += $(if $(V),,--quiet)
 %.lo: %.c
@@ -82,6 +96,19 @@ LINK = $(call quiet-command,\
        $(if $(filter %.lo %.la,$1),$(version-lobj-y),$(version-obj-y)) \
        $(if $(filter %.lo %.la,$1),$(LIBTOOLFLAGS)) \
        $(call extract-libs,$(1:.lo=.o)) $(LIBS),$(if $(filter %.lo %.la,$1),"lt LINK ", "  LINK  ")"$(TARGET_DIR)$@")
+
+SO_LINK = $(call quiet-command,\
+	  $(if $(filter %.lo %.la,$1),$(LIBTOOL) --mode=link --tag=CC \
+	  )$(LINKPROG) $(QEMU_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ \
+	  -shared \
+	  $(so_name_flag) \
+	  $(version_script_flag) \
+	  $(whole_archive_flag) \
+	  $(call process-archive-undefs, $1)\
+	  $(if $(filter %.lo %.la,$1),$(version-lobj-y),$(version-obj-y)) \
+	  $(no_whole_archive_flag) \
+	  $(if $(filter %.lo %.la,$1),$(LIBTOOLFLAGS)) \
+	  $(call extract-libs,$(1:.lo=.o)) $(LIBS),$(if $(filter %.lo %.la,$1),"lt LINK ", "  LINK  ")"$(TARGET_DIR)$@")
 endif
 
 %.asm: %.S
@@ -102,7 +129,7 @@ endif
 %.o: %.dtrace
 	$(call quiet-command,dtrace -o $@ -G -s $<, "  GEN   $(TARGET_DIR)$@")
 
-%$(DSOSUF): CFLAGS += -fPIC -DBUILD_DSO
+%$(DSOSUF): CFLAGS += -fPIC
 %$(DSOSUF): LDFLAGS += $(LDFLAGS_SHARED)
 %$(DSOSUF): %.mo
 	$(call LINK,$^)

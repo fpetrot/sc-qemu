@@ -31,6 +31,10 @@ QEMU_PROG_BUILD = $(QEMU_PROG)
 endif
 endif
 
+ifdef CONFIG_RABBITS
+RABBITS_LIB=libqemu-system-$(TARGET_NAME).so
+endif
+
 PROGS=$(QEMU_PROG) $(QEMU_PROGW)
 STPFILES=
 
@@ -75,7 +79,11 @@ else
 stap:
 endif
 
+ifdef CONFIG_RABBITS
+all: $(RABBITS_LIB) stap
+else
 all: $(PROGS) stap
+endif
 
 # Dummy command so that make thinks it has done something
 	@true
@@ -97,6 +105,8 @@ obj-$(CONFIG_LIBDECNUMBER) += libdecnumber/decNumber.o
 obj-$(CONFIG_LIBDECNUMBER) += libdecnumber/dpd/decimal32.o
 obj-$(CONFIG_LIBDECNUMBER) += libdecnumber/dpd/decimal64.o
 obj-$(CONFIG_LIBDECNUMBER) += libdecnumber/dpd/decimal128.o
+
+obj-y += rabbits/
 
 #########################################################
 # Linux user emulator target
@@ -180,6 +190,10 @@ $(QEMU_PROG_BUILD): config-devices.mak
 # build either PROG or PROGW
 $(QEMU_PROG_BUILD): $(all-obj-y) ../libqemuutil.a ../libqemustub.a
 	$(call LINK, $(filter-out %.mak, $^))
+
+$(RABBITS_LIB): $(all-obj-y) ../libqemuutil.a ../libqemustub.a
+	$(call SO_LINK, $(filter-out %.mak, $^),$(RABBITS_LIB),$(SRC_PATH)/rabbits/exports.version)
+
 
 gdbstub-xml.c: $(TARGET_XML_FILES) $(SRC_PATH)/scripts/feature_to_c.sh
 	$(call quiet-command,rm -f $@ && $(SHELL) $(SRC_PATH)/scripts/feature_to_c.sh $@ $(TARGET_XML_FILES),"  GEN   $(TARGET_DIR)$@")

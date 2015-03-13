@@ -336,6 +336,7 @@ libssh2=""
 vhdx=""
 quorum=""
 numa=""
+rabbits="no"
 
 # parse CC options first
 for opt do
@@ -1134,6 +1135,10 @@ for opt do
   ;;
   --enable-numa) numa="yes"
   ;;
+  --disable-rabbits) rabbits="no"
+  ;;
+  --enable-rabbits) rabbits="yes"
+  ;;
   *)
       echo "ERROR: unknown option $opt"
       echo "Try '$0 --help' for more information"
@@ -1407,6 +1412,8 @@ Advanced options (experts only):
   --enable-quorum          enable quorum block filter support
   --disable-numa           disable libnuma support
   --enable-numa            enable libnuma support
+  --disable-rabbits        disable rabbits support
+  --enable-rabbits         enable rabbits support
 
 NOTE: The object files are built at the place where configure is launched
 EOF
@@ -1559,7 +1566,7 @@ if test "$pie" = ""; then
   esac
 fi
 
-if test "$pie" != "no" ; then
+if test "$pie" != "no" -o "$rabbits" == "yes"; then
   cat > $TMPC << EOF
 
 #ifdef __linux__
@@ -1573,7 +1580,13 @@ static THREAD int tls_var;
 int main(void) { return tls_var; }
 
 EOF
-  if compile_prog "-fPIE -DPIE" "-pie"; then
+  if test "$rabbits" == "yes" ; then
+    if compile_prog "-fPIC -DPIC" ""; then
+      QEMU_CFLAGS="-fPIC -DPIC $QEMU_CFLAGS"
+    else
+      error_exit "PIC compilation required for rabbits but not available"
+    fi
+  elif compile_prog "-fPIE -DPIE" "-pie"; then
     QEMU_CFLAGS="-fPIE -DPIE $QEMU_CFLAGS"
     LDFLAGS="-pie $LDFLAGS"
     pie="yes"
@@ -4412,6 +4425,7 @@ echo "lzo support       $lzo"
 echo "snappy support    $snappy"
 echo "bzip2 support     $bzip2"
 echo "NUMA host support $numa"
+echo "Rabbits support   $rabbits"
 
 if test "$sdl_too_old" = "yes"; then
 echo "-> Your SDL version is too old - please upgrade to have SDL support"
@@ -5416,6 +5430,10 @@ fi
 
 if test "$numa" = "yes"; then
   echo "CONFIG_NUMA=y" >> $config_host_mak
+fi
+
+if test "$rabbits" = "yes"; then
+  echo "CONFIG_RABBITS=y" >> $config_host_mak
 fi
 
 # build tree in object directory in case the source is not in the current directory
