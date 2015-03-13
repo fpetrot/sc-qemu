@@ -1566,7 +1566,7 @@ if test "$pie" = ""; then
   esac
 fi
 
-if test "$pie" != "no" -o "$rabbits" == "yes"; then
+if test "$pie" != "no" -o "$rabbits" = "yes"; then
   cat > $TMPC << EOF
 
 #ifdef __linux__
@@ -1580,7 +1580,7 @@ static THREAD int tls_var;
 int main(void) { return tls_var; }
 
 EOF
-  if test "$rabbits" == "yes" ; then
+  if test "$rabbits" = "yes" ; then
     if compile_prog "-fPIC -DPIC" ""; then
       QEMU_CFLAGS="-fPIC -DPIC $QEMU_CFLAGS"
     else
