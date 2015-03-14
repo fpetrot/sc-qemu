@@ -6,14 +6,9 @@
 #include "hw/arm/arm.h"
 
 #include "sc_qemu.h"
+#include "sc_machine.h"
 
 qemu_context* SC_QEMU_INIT_SYM(qemu_import *q, systemc_import *s, void *opaque);
-
-struct qemu_context {
-    void *opaque;
-    systemc_import sysc;
-    ARMCPU *cpu;
-};
 
 typedef struct mmio_ctx mmio_ctx;
 
@@ -27,7 +22,8 @@ static uint64_t sc_mmio_read(void *opaque, hwaddr offset,
 {
     mmio_ctx *ctx = (mmio_ctx*) opaque;
 
-    return ctx->qemu_ctx->sysc.read(ctx->qemu_ctx->opaque, ctx->base + offset, size);
+    return ctx->qemu_ctx->sysc.read(ctx->qemu_ctx->opaque,
+                                    ctx->base + offset, size);
 }
 
 static void sc_mmio_write(void *opaque, hwaddr offset,
@@ -35,7 +31,8 @@ static void sc_mmio_write(void *opaque, hwaddr offset,
 {
     mmio_ctx *ctx = (mmio_ctx*) opaque;
 
-    ctx->qemu_ctx->sysc.write(ctx->qemu_ctx->opaque, ctx->base + offset, value, size);
+    ctx->qemu_ctx->sysc.write(ctx->qemu_ctx->opaque,
+                              ctx->base + offset, value, size);
 }
 
 static const MemoryRegionOps sc_mmio_ops = {
@@ -45,10 +42,11 @@ static const MemoryRegionOps sc_mmio_ops = {
 };
 
 
-static void sc_qemu_cpu_loop(qemu_context *ctx)
+static bool sc_qemu_cpu_loop(qemu_context *ctx)
 {
-    //fprintf(stderr, "loop\n");
     main_loop_wait(true);
+
+    return main_loop_should_exit();
 }
 
 static void sc_qemu_irq_update(qemu_context *ctx, int cpu_mask,
@@ -87,27 +85,14 @@ static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
 }
 
 
-static void init_arm_cpu(qemu_context *ctx)
-{
-    ARMCPU *cpu;
-
-    cpu = cpu_arm_init("arm1176");
-    if (!cpu) {
-        fprintf(stderr, "Unable to find CPU definition\n");
-        exit(1);
-    }
-
-    ctx->cpu = cpu;
-}
-
-
-/* XXX */ int qemu_main(int argc, char const * argv[], char **envp);
+int qemu_main(int argc, char const * argv[], char **envp);
 
 qemu_context* SC_QEMU_INIT_SYM(qemu_import *q, systemc_import *s, void *opaque)
 {
     char const * qemu_argv[] = {
         "qemu",
         "-M", "sc-qemu",
+        "-s", "-S",
         /*
         "-d", "in_asm,exec",
         "-D", "qemu.log",
@@ -116,19 +101,21 @@ qemu_context* SC_QEMU_INIT_SYM(qemu_import *q, systemc_import *s, void *opaque)
     qemu_context *ctx;
     int qemu_argc = ARRAY_SIZE(qemu_argv);
 
-    fprintf(stderr, "Launching QEMU with %d args\n", qemu_argc);
     qemu_main(qemu_argc, qemu_argv, NULL);
 
+    /* SystemC to QEMU fonctions */
     q->cpu_loop = sc_qemu_cpu_loop;
     q->irq_update = sc_qemu_irq_update;
     q->map_io = sc_qemu_map_io;
     q->map_dmi = sc_qemu_map_dmi;
 
-    ctx = g_malloc0(sizeof(qemu_context));
+    ctx = sc_qemu_machine_get_context();
+
     ctx->opaque = opaque;
+
+    /* QEMU to SystemC functions */
     memcpy(&(ctx->sysc), s, sizeof(systemc_import));
 
-    init_arm_cpu(ctx);
 
     return ctx;
 }
