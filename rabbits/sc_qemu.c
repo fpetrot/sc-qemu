@@ -42,6 +42,10 @@ static const MemoryRegionOps sc_mmio_ops = {
 };
 
 
+/* vl.c */
+bool main_loop_should_exit(void);
+/* ---- */
+
 static bool sc_qemu_cpu_loop(qemu_context *ctx)
 {
     main_loop_wait(true);
