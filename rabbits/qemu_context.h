@@ -6,7 +6,7 @@
 struct qemu_context {
     void *opaque;
     systemc_import sysc;
-    ARMCPU *cpu;
+    ARMCPU **cpus;
 };
 
 #endif

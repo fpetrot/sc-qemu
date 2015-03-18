@@ -31,18 +31,23 @@ static void init_arm_cpu(qemu_context *ctx, const char *model)
 {
     ARMCPU *cpu;
     char const *m = model;
+    int i;
 
     if(model == NULL) {
         m = "arm1176";
     }
 
-    cpu = cpu_arm_init(m);
-    if (!cpu) {
-        fprintf(stderr, "Unable to find CPU definition\n");
-        exit(1);
-    }
+    ctx->cpus = g_malloc0(sizeof(ARMCPU*) * smp_cpus);
 
-    ctx->cpu = cpu;
+    for(i = 0; i < smp_cpus; i++) {
+        cpu = cpu_arm_init(m);
+        if (!cpu) {
+            fprintf(stderr, "Unable to find CPU definition\n");
+            exit(1);
+        }
+
+        ctx->cpus[i] = cpu;
+    }
 }
 
 static void sc_qemu_machine_init(MachineState *machine)
@@ -60,6 +65,7 @@ static QEMUMachine sc_qemu_machine = {
     .name = "sc-qemu",
     .desc = "Rabbits SystemC/QEMU machine",
     .init = sc_qemu_machine_init,
+    .max_cpus = 128,
 };
 
 static void sc_qemu_regiter_type(void)

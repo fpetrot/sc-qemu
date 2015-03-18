@@ -7,6 +7,7 @@
 
 #include "sc_qemu.h"
 #include "sc_machine.h"
+#include "qemu_context.h"
 
 qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s);
 
@@ -58,7 +59,7 @@ static void sc_qemu_irq_update(qemu_context *ctx, int cpu_idx,
 {
     qemu_irq i;
 
-    i = qdev_get_gpio_in(DEVICE(ctx->cpu), irq_idx);
+    i = qdev_get_gpio_in(DEVICE(ctx->cpus[cpu_idx]), irq_idx);
 
     qemu_set_irq(i, level);
 }
@@ -93,10 +94,15 @@ int qemu_main(int argc, char const * argv[], char **envp);
 
 qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 {
+    char num_cpu[4];
+
+    snprintf(num_cpu, sizeof(num_cpu), "%d", s->num_cpu);
+
     char const * qemu_argv[] = {
-        "qemu",
+        "",
         "-M", "sc-qemu",
         "-cpu", s->cpu_model,
+        "-smp", num_cpu,
         /*"-s", "-S",*/
         /*
         "-d", "in_asm,exec",
