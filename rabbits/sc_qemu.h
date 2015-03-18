@@ -21,7 +21,7 @@ typedef struct systemc_import systemc_import;
 typedef qemu_context* (*sc_qemu_init_fn)(qemu_import *, systemc_import *, void *);
 
 typedef bool (*sc_qemu_cpu_loop_fn)(qemu_context *);
-typedef void (*sc_qemu_irq_update_fn)(qemu_context *, int cpu_mask, int level);
+typedef void (*sc_qemu_irq_update_fn)(qemu_context *, int cpu_idx, int irq_idx, int level);
 typedef void (*sc_qemu_map_io_fn)(qemu_context *, uint32_t base_address, uint32_t size);
 typedef void (*sc_qemu_map_dmi_fn)(qemu_context *, uint32_t base_address, uint32_t size, void *data);
 
@@ -39,6 +39,11 @@ struct systemc_import {
     qemu_sc_read_fn  read;
     qemu_sc_write_fn write;
 };
+
+/* Targets specific */
+#include "sc_qemu_arm.h"
+/* ... add others here .. */
+
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -53,12 +53,12 @@ static bool sc_qemu_cpu_loop(qemu_context *ctx)
     return main_loop_should_exit();
 }
 
-static void sc_qemu_irq_update(qemu_context *ctx, int cpu_mask,
-                               int level)
+static void sc_qemu_irq_update(qemu_context *ctx, int cpu_idx,
+                               int irq_idx, int level)
 {
     qemu_irq i;
 
-    i = qdev_get_gpio_in(DEVICE(ctx->cpu), ARM_CPU_IRQ);
+    i = qdev_get_gpio_in(DEVICE(ctx->cpu), irq_idx);
 
     qemu_set_irq(i, level);
 }
