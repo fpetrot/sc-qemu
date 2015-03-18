@@ -8,7 +8,7 @@
 #include "sc_qemu.h"
 #include "sc_machine.h"
 
-qemu_context* SC_QEMU_INIT_SYM(qemu_import *q, systemc_import *s, void *opaque);
+qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s);
 
 typedef struct mmio_ctx mmio_ctx;
 
@@ -91,35 +91,36 @@ static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
 
 int qemu_main(int argc, char const * argv[], char **envp);
 
-qemu_context* SC_QEMU_INIT_SYM(qemu_import *q, systemc_import *s, void *opaque)
+qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 {
     char const * qemu_argv[] = {
         "qemu",
         "-M", "sc-qemu",
-        "-s", "-S",
+        "-cpu", s->cpu_model,
+        /*"-s", "-S",*/
         /*
         "-d", "in_asm,exec",
         "-D", "qemu.log",
         */
     };
+
     qemu_context *ctx;
     int qemu_argc = ARRAY_SIZE(qemu_argv);
 
     qemu_main(qemu_argc, qemu_argv, NULL);
 
     /* SystemC to QEMU fonctions */
-    q->cpu_loop = sc_qemu_cpu_loop;
-    q->irq_update = sc_qemu_irq_update;
-    q->map_io = sc_qemu_map_io;
-    q->map_dmi = sc_qemu_map_dmi;
+    s->q_import->cpu_loop = sc_qemu_cpu_loop;
+    s->q_import->irq_update = sc_qemu_irq_update;
+    s->q_import->map_io = sc_qemu_map_io;
+    s->q_import->map_dmi = sc_qemu_map_dmi;
 
     ctx = sc_qemu_machine_get_context();
 
-    ctx->opaque = opaque;
+    ctx->opaque = s->opaque;
 
     /* QEMU to SystemC functions */
-    memcpy(&(ctx->sysc), s, sizeof(systemc_import));
-
+    memcpy(&(ctx->sysc), &(s->sc_import), sizeof(systemc_import));
 
     return ctx;
 }

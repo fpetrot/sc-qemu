@@ -17,8 +17,9 @@ typedef struct qemu_context qemu_context;
 
 typedef struct qemu_import qemu_import;
 typedef struct systemc_import systemc_import;
+typedef struct sc_qemu_init_struct sc_qemu_init_struct;
 
-typedef qemu_context* (*sc_qemu_init_fn)(qemu_import *, systemc_import *, void *);
+typedef qemu_context* (*sc_qemu_init_fn)(sc_qemu_init_struct *);
 
 typedef bool (*sc_qemu_cpu_loop_fn)(qemu_context *);
 typedef void (*sc_qemu_irq_update_fn)(qemu_context *, int cpu_idx, int irq_idx, int level);
@@ -38,6 +39,16 @@ struct qemu_import {
 struct systemc_import {
     qemu_sc_read_fn  read;
     qemu_sc_write_fn write;
+};
+
+struct sc_qemu_init_struct {
+    qemu_import      *q_import;     /* < [out] Filled by QEMU after init call.
+                                     *  This field is not allocated by QEMU and
+                                     *  must target a valid address before the init call */
+    systemc_import   sc_import;     /* < [in]  SystemC callbacks used by QEMU  */
+    const char       *cpu_model;    /* < [in]  Requested cpu model */
+    int              num_cpu;       /* < [in]  Requested number of cpus */
+    void             *opaque;       /* < [in]  Opaque used as parameter of SystemC cb */
 };
 
 /* Targets specific */
