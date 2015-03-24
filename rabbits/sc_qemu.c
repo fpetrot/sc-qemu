@@ -89,7 +89,6 @@ static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
     memory_region_add_subregion(sysmem, base_address, dmi);
 }
 
-
 int qemu_main(int argc, char const * argv[], char **envp);
 
 qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
@@ -103,6 +102,7 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
         "-M", "sc-qemu",
         "-cpu", s->cpu_model,
         "-smp", num_cpu,
+        "-serial", "stdio"
         /*"-s", "-S",*/
         /*
         "-d", "in_asm,exec",
@@ -120,10 +120,14 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
     s->q_import->irq_update = sc_qemu_irq_update;
     s->q_import->map_io = sc_qemu_map_io;
     s->q_import->map_dmi = sc_qemu_map_dmi;
+    s->q_import->qdev_create = sc_qemu_qdev_create;
+    s->q_import->qdev_mmio_map = sc_qemu_qdev_mmio_map;
+    s->q_import->qdev_irq_update = sc_qemu_qdev_irq_update;
 
     ctx = sc_qemu_machine_get_context();
 
     ctx->opaque = s->opaque;
+    ctx->num_cpu = s->num_cpu;
 
     /* QEMU to SystemC functions */
     memcpy(&(ctx->sysc), &(s->sc_import), sizeof(systemc_import));
