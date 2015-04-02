@@ -102,7 +102,7 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
         "-M", "sc-qemu",
         "-cpu", s->cpu_model,
         "-smp", num_cpu,
-        "-serial", "stdio"
+        "-serial", "stdio",
         /*"-s", "-S",*/
         /*
         "-d", "in_asm,exec",
@@ -122,6 +122,7 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
     s->q_import->map_dmi = sc_qemu_map_dmi;
     s->q_import->qdev_create = sc_qemu_qdev_create;
     s->q_import->qdev_mmio_map = sc_qemu_qdev_mmio_map;
+    s->q_import->qdev_irq_connect = sc_qemu_qdev_irq_connect;
     s->q_import->qdev_irq_update = sc_qemu_qdev_irq_update;
 
     ctx = sc_qemu_machine_get_context();

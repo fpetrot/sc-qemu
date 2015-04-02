@@ -57,6 +57,11 @@ sc_qemu_qdev* sc_qemu_qdev_create(qemu_context *ctx, sc_qemu_qdev_e devid, ...)
                            serial_hds[0], DEVICE_NATIVE_ENDIAN);
         }
         break;
+
+    case SC_QDEV_SP804:
+        ret->dev = qdev_create(NULL, "sp804");
+        qdev_init_nofail(ret->dev);
+        break;
     }
 
     va_end(ap);
@@ -67,6 +72,12 @@ sc_qemu_qdev* sc_qemu_qdev_create(qemu_context *ctx, sc_qemu_qdev_e devid, ...)
 void sc_qemu_qdev_mmio_map(sc_qemu_qdev *dev, int mmio_id, uint32_t addr)
 {
     sysbus_mmio_map(SYS_BUS_DEVICE(dev->dev), mmio_id, addr);
+}
+
+void sc_qemu_qdev_irq_connect(sc_qemu_qdev *src, int src_idx,
+                              sc_qemu_qdev *dst, int dst_idx)
+{
+    sysbus_connect_irq(SYS_BUS_DEVICE(dst->dev), dst_idx, qdev_get_gpio_in(src->dev, src_idx));
 }
 
 void sc_qemu_qdev_irq_update(sc_qemu_qdev *dev, int irq_idx, int level)

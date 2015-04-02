@@ -28,8 +28,7 @@ typedef enum sc_qemu_qdev_e {
     /* Variadic initialisation :
      *  - number of interrupts, uint32_t
      * MMIO Mapping :
-     *  0: GIC Distributor base address
-     *  1: GIC CPU base address
+     *  0: GIC  base address
      */
     SC_QDEV_A15PRIV = 0,
 
@@ -41,6 +40,13 @@ typedef enum sc_qemu_qdev_e {
      *  - baud base, int
      */
     SC_QDEV_16550,
+
+    /* Variadic initialisation :
+     *  nothing
+     * MMIO Mapping:
+     *  0: sp804 base address
+     */
+    SC_QDEV_SP804,
 } sc_qemu_qdev_e;
 
 typedef bool (*sc_qemu_cpu_loop_fn)(qemu_context *);
@@ -49,6 +55,7 @@ typedef void (*sc_qemu_map_io_fn)(qemu_context *, uint32_t base_address, uint32_
 typedef void (*sc_qemu_map_dmi_fn)(qemu_context *, uint32_t base_address, uint32_t size, void *data);
 typedef sc_qemu_qdev* (*sc_qemu_qdev_create_fn)(qemu_context *, sc_qemu_qdev_e, ...);
 typedef void (*sc_qemu_qdev_mmio_map_fn)(sc_qemu_qdev *dev, int mmio_id, uint32_t addr);
+typedef void (*sc_qemu_qdev_irq_connect_fn)(sc_qemu_qdev *src, int src_idx, sc_qemu_qdev *dst, int dst_idx);
 typedef void (*sc_qemu_qdev_irq_update_fn)(sc_qemu_qdev *dev, int irq_idx, int level);
 
 typedef uint32_t (*qemu_sc_read_fn)(void *opaque, uint32_t addr, uint32_t size);
@@ -58,13 +65,14 @@ typedef void (*qemu_sc_write_fn)(void *opaque, uint32_t addr, uint32_t val, uint
 #include "sc_qemu_arm.h"
 
 struct qemu_import {
-    sc_qemu_cpu_loop_fn        cpu_loop;
-    sc_qemu_irq_update_fn      irq_update;
-    sc_qemu_map_io_fn          map_io;
-    sc_qemu_map_dmi_fn         map_dmi;
-    sc_qemu_qdev_create_fn     qdev_create;
-    sc_qemu_qdev_mmio_map_fn   qdev_mmio_map;
-    sc_qemu_qdev_irq_update_fn qdev_irq_update;
+    sc_qemu_cpu_loop_fn         cpu_loop;
+    sc_qemu_irq_update_fn       irq_update;
+    sc_qemu_map_io_fn           map_io;
+    sc_qemu_map_dmi_fn          map_dmi;
+    sc_qemu_qdev_create_fn      qdev_create;
+    sc_qemu_qdev_mmio_map_fn    qdev_mmio_map;
+    sc_qemu_qdev_irq_connect_fn qdev_irq_connect;
+    sc_qemu_qdev_irq_update_fn  qdev_irq_update;
 };
 
 struct systemc_import {
