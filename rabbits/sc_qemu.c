@@ -83,8 +83,13 @@ static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
 {
     MemoryRegion *sysmem = get_system_memory();
     MemoryRegion *dmi = g_new(MemoryRegion, 1);
+    static int dmi_count = 0;
 
-    memory_region_init_ram_ptr(dmi, NULL, "sc-dmi", size, data);
+    char name[] = "sc-dmi  ";
+    snprintf(name, sizeof(name), "sc-dmi%d", dmi_count);
+    dmi_count++;
+
+    memory_region_init_ram_ptr(dmi, NULL, name, size, data);
     vmstate_register_ram_global(dmi);
     memory_region_add_subregion(sysmem, base_address, dmi);
 }
