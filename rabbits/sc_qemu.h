@@ -53,6 +53,7 @@ typedef bool (*sc_qemu_cpu_loop_fn)(qemu_context *);
 typedef void (*sc_qemu_irq_update_fn)(qemu_context *, int cpu_idx, int irq_idx, int level);
 typedef void (*sc_qemu_map_io_fn)(qemu_context *, uint32_t base_address, uint32_t size);
 typedef void (*sc_qemu_map_dmi_fn)(qemu_context *, uint32_t base_address, uint32_t size, void *data);
+typedef void (*sc_qemu_start_gdbserver_fn)(qemu_context *, const char *port);
 typedef sc_qemu_qdev* (*sc_qemu_qdev_create_fn)(qemu_context *, sc_qemu_qdev_e, ...);
 typedef void (*sc_qemu_qdev_mmio_map_fn)(sc_qemu_qdev *dev, int mmio_id, uint32_t addr);
 typedef void (*sc_qemu_qdev_irq_connect_fn)(sc_qemu_qdev *src, int src_idx, sc_qemu_qdev *dst, int dst_idx);
@@ -69,6 +70,7 @@ struct qemu_import {
     sc_qemu_irq_update_fn       irq_update;
     sc_qemu_map_io_fn           map_io;
     sc_qemu_map_dmi_fn          map_dmi;
+    sc_qemu_start_gdbserver_fn  start_gdbserver;
     sc_qemu_qdev_create_fn      qdev_create;
     sc_qemu_qdev_mmio_map_fn    qdev_mmio_map;
     sc_qemu_qdev_irq_connect_fn qdev_irq_connect;

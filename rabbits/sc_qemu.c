@@ -4,6 +4,7 @@
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
 #include "hw/arm/arm.h"
+#include "exec/gdbstub.h"
 
 #include "sc_qemu.h"
 #include "sc_machine.h"
@@ -94,6 +95,12 @@ static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
     memory_region_add_subregion(sysmem, base_address, dmi);
 }
 
+static void sc_qemu_start_gdbserver(qemu_context *ctx, const char *port)
+{
+    gdbserver_start(port);
+    qemu_system_debug_request();
+}
+
 int qemu_main(int argc, char const * argv[], char **envp);
 
 qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
@@ -112,11 +119,8 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 #else
         "-nographic",
 #endif
-        /*"-s", "-S",*/
-        /*
-        "-d", "in_asm,exec",
-        "-D", "qemu.log",
-        */
+        /*"-d", "in_asm,exec",*/
+        /*"-D", "qemu.log",*/
     };
 
     qemu_context *ctx;
@@ -129,6 +133,7 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
     s->q_import->irq_update = sc_qemu_irq_update;
     s->q_import->map_io = sc_qemu_map_io;
     s->q_import->map_dmi = sc_qemu_map_dmi;
+    s->q_import->start_gdbserver = sc_qemu_start_gdbserver;
     s->q_import->qdev_create = sc_qemu_qdev_create;
     s->q_import->qdev_mmio_map = sc_qemu_qdev_mmio_map;
     s->q_import->qdev_irq_connect = sc_qemu_qdev_irq_connect;
