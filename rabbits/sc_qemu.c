@@ -107,7 +107,11 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
         "-M", "sc-qemu",
         "-cpu", s->cpu_model,
         "-smp", num_cpu,
+#if 0
         "-serial", "stdio",
+#else
+        "-nographic",
+#endif
         /*"-s", "-S",*/
         /*
         "-d", "in_asm,exec",
