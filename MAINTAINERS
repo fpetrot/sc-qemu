@@ -172,7 +172,8 @@ F: hw/unicore32/
 X86
 M: Paolo Bonzini <pbonzini@redhat.com>
 M: Richard Henderson <rth@twiddle.net>
-S: Odd Fixes
+M: Eduardo Habkost <ehabkost@redhat.com>
+S: Maintained
 F: target-i386/
 F: hw/i386/
 
@@ -904,6 +905,15 @@ F: block/nbd.c
 F: nbd.*
 F: qemu-nbd.c
 T: git git://github.com/bonzini/qemu.git nbd-next
+
+NUMA
+M: Eduardo Habkost <ehabkost@redhat.com>
+S: Maintained
+F: numa.c
+F: include/sysemu/numa.h
+K: numa|NUMA
+K: srat|SRAT
+T: git git://github.com/ehabkost/qemu.git numa
 
 QAPI
 M: Luiz Capitulino <lcapitulino@redhat.com>

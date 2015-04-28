@@ -218,6 +218,7 @@
 #       'host_floppy', 'http', 'https', 'nbd', 'parallels', 'qcow',
 #       'qcow2', 'raw', 'tftp', 'vdi', 'vmdk', 'vpc', 'vvfat'
 #       2.2: 'archipelago' added, 'cow' dropped
+#       2.3: 'host_floppy' deprecated
 #
 # @backing_file: #optional the name of the backing file (for copy-on-write)
 #
@@ -881,9 +882,6 @@
 #
 # For the arguments, see the documentation of BlockdevBackup.
 #
-# Returns: Nothing on success.
-#          If @device or @target is not a valid block device, DeviceNotFound.
-#
 # Since 2.3
 ##
 { 'command': 'blockdev-backup', 'data': 'BlockdevBackup' }
@@ -1245,6 +1243,7 @@
 # Drivers that are supported in block device operations.
 #
 # @host_device, @host_cdrom, @host_floppy: Since 2.1
+# @host_floppy: deprecated since 2.3
 #
 # Since: 2.0
 ##
@@ -1722,6 +1721,10 @@
 #
 # Creates a new block device.
 #
+# This command is still a work in progress.  It doesn't support all
+# block drivers, it lacks a matching blockdev-del, and more.  Stay
+# away from it unless you want to help with its development.
+#
 # @options: block device options for the new device
 #
 # Since: 1.7
@@ -1960,10 +1963,6 @@
 #
 # @write-threshold: configured threshold for the block device, bytes.
 #                   Use 0 to disable the threshold.
-#
-# Returns: Nothing on success
-#          If @node name is not found on the block device graph,
-#          DeviceNotFound
 #
 # Since: 2.3
 ##

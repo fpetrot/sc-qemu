@@ -139,7 +139,6 @@ void migrate_add_blocker(Error *reason);
  */
 void migrate_del_blocker(Error *reason);
 
-bool migrate_rdma_pin_all(void);
 bool migrate_zero_blocks(void);
 
 bool migrate_auto_converge(void);
@@ -169,6 +168,6 @@ void ram_control_load_hook(QEMUFile *f, uint64_t flags);
 
 size_t ram_control_save_page(QEMUFile *f, ram_addr_t block_offset,
                              ram_addr_t offset, size_t size,
-                             int *bytes_sent);
+                             uint64_t *bytes_sent);
 
 #endif

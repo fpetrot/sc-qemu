@@ -46,6 +46,8 @@ typedef struct va_list_str *va_list;
 
 typedef struct AddressSpace AddressSpace;
 typedef uint64_t hwaddr;
+typedef uint32_t MemTxResult;
+typedef uint64_t MemTxAttrs;
 
 static void __write(uint8_t *buf, ssize_t len)
 {
@@ -65,10 +67,10 @@ static void __read(uint8_t *buf, ssize_t len)
     int last = buf[len-1];
 }
 
-bool address_space_rw(AddressSpace *as, hwaddr addr, uint8_t *buf,
-                      int len, bool is_write)
+MemTxResult address_space_rw(AddressSpace *as, hwaddr addr, MemTxAttrs attrs,
+                             uint8_t *buf, int len, bool is_write)
 {
-    bool result;
+    MemTxResult result;
 
     // TODO: investigate impact of treating reads as producing
     // tainted data, with __coverity_tainted_data_argument__(buf).
@@ -123,7 +125,7 @@ void *g_malloc_n(size_t nmemb, size_t size)
     __coverity_negative_sink__(nmemb);
     __coverity_negative_sink__(size);
     sz = nmemb * size;
-    ptr = __coverity_alloc__(size);
+    ptr = __coverity_alloc__(sz);
     __coverity_mark_as_uninitialized_buffer__(ptr);
     __coverity_mark_as_afm_allocated__(ptr, "g_free");
     return ptr;
@@ -137,7 +139,7 @@ void *g_malloc0_n(size_t nmemb, size_t size)
     __coverity_negative_sink__(nmemb);
     __coverity_negative_sink__(size);
     sz = nmemb * size;
-    ptr = __coverity_alloc__(size);
+    ptr = __coverity_alloc__(sz);
     __coverity_writeall0__(ptr);
     __coverity_mark_as_afm_allocated__(ptr, "g_free");
     return ptr;
@@ -151,7 +153,7 @@ void *g_realloc_n(void *ptr, size_t nmemb, size_t size)
     __coverity_negative_sink__(size);
     sz = nmemb * size;
     __coverity_escape__(ptr);
-    ptr = __coverity_alloc__(size);
+    ptr = __coverity_alloc__(sz);
     /*
      * Memory beyond the old size isn't actually initialized.  Can't
      * model that.  See Coverity's realloc() model

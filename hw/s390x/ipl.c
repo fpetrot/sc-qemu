@@ -14,7 +14,6 @@
 #include "sysemu/sysemu.h"
 #include "cpu.h"
 #include "elf.h"
-#include "exec/ram_addr.h"
 #include "hw/loader.h"
 #include "hw/sysbus.h"
 #include "hw/s390x/virtio-ccw.h"
@@ -142,9 +141,6 @@ static int s390_ipl_init(SysBusDevice *dev)
             bios_size = load_image_targphys(bios_filename, ZIPL_IMAGE_START,
                                             4096);
             ipl->bios_start_addr = ZIPL_IMAGE_START;
-            if (bios_size > 4096) {
-                hw_error("stage1 bootloader is > 4k\n");
-            }
         }
         g_free(bios_filename);
 
@@ -222,7 +218,7 @@ static Property s390_ipl_properties[] = {
  * - -1 if no valid boot device was found
  * - ccw id of the boot device otherwise
  */
-static uint64_t s390_update_iplstate(CPUS390XState *env, S390IPLState *ipl)
+static uint32_t s390_update_iplstate(CPUS390XState *env, S390IPLState *ipl)
 {
     DeviceState *dev_st;
 

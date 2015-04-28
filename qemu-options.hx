@@ -37,7 +37,10 @@ DEF("machine", HAS_ARG, QEMU_OPTION_machine, \
     "                kvm_shadow_mem=size of KVM shadow MMU\n"
     "                dump-guest-core=on|off include guest memory in a core dump (default=on)\n"
     "                mem-merge=on|off controls memory merge support (default: on)\n"
-    "                iommu=on|off controls emulated Intel IOMMU (VT-d) support (default=off)\n",
+    "                iommu=on|off controls emulated Intel IOMMU (VT-d) support (default=off)\n"
+    "                aes-key-wrap=on|off controls support for AES key wrapping (default=on)\n"
+    "                dea-key-wrap=on|off controls support for DEA key wrapping (default=on)\n"
+    "                suppress-vmdesc=on|off disables self-describing migration (default=off)\n",
     QEMU_ARCH_ALL)
 STEXI
 @item -machine [type=]@var{name}[,prop=@var{value}[,...]]
@@ -66,6 +69,14 @@ the host, de-duplicates identical memory pages among VMs instances
 (enabled by default).
 @item iommu=on|off
 Enables or disables emulated Intel IOMMU (VT-d) support. The default is off.
+@item aes-key-wrap=on|off
+Enables or disables AES key wrapping support on s390-ccw hosts. This feature
+controls whether AES wrapping keys will be created to allow
+execution of AES cryptographic functions.  The default is on.
+@item dea-key-wrap=on|off
+Enables or disables DEA key wrapping support on s390-ccw hosts. This feature
+controls whether DEA wrapping keys will be created to allow
+execution of DEA cryptographic functions.  The default is on.
 @end table
 ETEXI
 
@@ -408,8 +419,7 @@ STEXI
 @item -fdb @var{file}
 @findex -fda
 @findex -fdb
-Use @var{file} as floppy disk 0/1 image (@pxref{disk_images}). You can
-use the host floppy by using @file{/dev/fd0} as filename (@pxref{host_drives}).
+Use @var{file} as floppy disk 0/1 image (@pxref{disk_images}).
 ETEXI
 
 DEF("hda", HAS_ARG, QEMU_OPTION_hda,
@@ -1392,7 +1402,7 @@ DEF("smbios", HAS_ARG, QEMU_OPTION_smbios,
     "              [,asset=str][,part=str]\n"
     "                specify SMBIOS type 4 fields\n"
     "-smbios type=17[,loc_pfx=str][,bank=str][,manufacturer=str][,serial=str]\n"
-    "               [,asset=str][,part=str]\n"
+    "               [,asset=str][,part=str][,speed=%d]\n"
     "                specify SMBIOS type 17 fields\n",
     QEMU_ARCH_I386)
 STEXI
@@ -1415,7 +1425,7 @@ Specify SMBIOS type 3 fields
 @item -smbios type=4[,sock_pfx=@var{str}][,manufacturer=@var{str}][,version=@var{str}][,serial=@var{str}][,asset=@var{str}][,part=@var{str}]
 Specify SMBIOS type 4 fields
 
-@item -smbios type=17[,loc_pfx=@var{str}][,bank=@var{str}][,manufacturer=@var{str}][,serial=@var{str}][,asset=@var{str}][,part=@var{str}]
+@item -smbios type=17[,loc_pfx=@var{str}][,bank=@var{str}][,manufacturer=@var{str}][,serial=@var{str}][,asset=@var{str}][,part=@var{str}][,speed=@var{%d}]
 Specify SMBIOS type 17 fields
 ETEXI
 

@@ -1014,6 +1014,7 @@ static int parse_add_fd(QemuOpts *opts, void *opaque)
     int fd, dupfd, flags;
     int64_t fdset_id;
     const char *fd_opaque = NULL;
+    AddfdInfo *fdinfo;
 
     fd = qemu_opt_get_number(opts, "fd", -1);
     fdset_id = qemu_opt_get_number(opts, "set", -1);
@@ -1063,8 +1064,9 @@ static int parse_add_fd(QemuOpts *opts, void *opaque)
     }
 
     /* add the duplicate fd, and optionally the opaque string, to the fd set */
-    monitor_fdset_add_fd(dupfd, true, fdset_id, fd_opaque ? true : false,
-                         fd_opaque, NULL);
+    fdinfo = monitor_fdset_add_fd(dupfd, true, fdset_id, !!fd_opaque, fd_opaque,
+                                  &error_abort);
+    g_free(fdinfo);
 
     return 0;
 }
@@ -3623,8 +3625,10 @@ int main(int argc, char **argv, char **envp)
                 }
                 break;
             case QEMU_OPTION_incoming:
+                if (!incoming) {
+                    runstate_set(RUN_STATE_INMIGRATE);
+                }
                 incoming = optarg;
-                runstate_set(RUN_STATE_INMIGRATE);
                 break;
             case QEMU_OPTION_nodefaults:
                 has_defaults = 0;
@@ -4175,7 +4179,7 @@ int main(int argc, char **argv, char **envp)
     default_drive(default_floppy, snapshot, IF_FLOPPY, 0, FD_OPTS);
     default_drive(default_sdcard, snapshot, IF_SD, 0, SD_OPTS);
 
-    parse_numa_opts();
+    parse_numa_opts(machine_class);
 
     if (qemu_opts_foreach(qemu_find_opts("mon"), mon_init_func, NULL, 1) != 0) {
         exit(1);

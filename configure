@@ -327,7 +327,7 @@ seccomp=""
 glusterfs=""
 glusterfs_discard="no"
 glusterfs_zerofill="no"
-archipelago=""
+archipelago="no"
 gtk=""
 gtkabi=""
 vte=""
@@ -3132,9 +3132,24 @@ libs_softmmu="$libs_softmmu $fdt_libs"
 
 ##########################################
 # opengl probe (for sdl2, milkymist-tmu2)
+
+# GLX probe, used by milkymist-tmu2
+# this is temporary, code will be switched to egl mid-term.
+cat > $TMPC << EOF
+#include <X11/Xlib.h>
+#include <GL/gl.h>
+#include <GL/glx.h>
+int main(void) { glBegin(0); glXQueryVersion(0,0,0); return 0; }
+EOF
+if compile_prog "" "-lGL -lX11" ; then
+  have_glx=yes
+else
+  have_glx=no
+fi
+
 if test "$opengl" != "no" ; then
-  opengl_pkgs="gl glx"
-  if $pkg_config $opengl_pkgs x11; then
+  opengl_pkgs="gl"
+  if $pkg_config $opengl_pkgs x11 && test "$have_glx" = "yes"; then
     opengl_cflags="$($pkg_config --cflags $opengl_pkgs) $x11_cflags"
     opengl_libs="$($pkg_config --libs $opengl_pkgs) $x11_libs"
     opengl=yes
@@ -3166,6 +3181,12 @@ EOF
         archipelago="yes"
         libs_tools="$archipelago_libs $libs_tools"
         libs_softmmu="$archipelago_libs $libs_softmmu"
+
+	echo "WARNING: Please check the licenses of QEMU and libxseg carefully."
+	echo "GPLv3 versions of libxseg may not be compatible with QEMU's"
+	echo "license and therefore prevent redistribution."
+	echo
+	echo "To disable Archipelago, use --disable-archipelago"
     else
       if test "$archipelago" = "yes" ; then
         feature_not_found "Archipelago backend support" "Install libxseg devel"
@@ -5267,7 +5288,9 @@ case "$target_name" in
       \( "$target_name" = "ppcemb" -a "$cpu" = "ppc64" \) -o \
       \( "$target_name" = "mipsel" -a "$cpu" = "mips" \) -o \
       \( "$target_name" = "x86_64" -a "$cpu" = "i386"   \) -o \
-      \( "$target_name" = "i386"   -a "$cpu" = "x86_64" \) \) ; then
+      \( "$target_name" = "i386"   -a "$cpu" = "x86_64" \) -o \
+      \( "$target_name" = "x86_64" -a "$cpu" = "x32"   \) -o \
+      \( "$target_name" = "i386"   -a "$cpu" = "x32" \) \) ; then
       echo "CONFIG_KVM=y" >> $config_target_mak
       if test "$vhost_net" = "yes" ; then
         echo "CONFIG_VHOST_NET=y" >> $config_target_mak

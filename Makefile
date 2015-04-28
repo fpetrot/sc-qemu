@@ -112,7 +112,8 @@ endif
 -include $(SUBDIR_DEVICES_MAK_DEP)
 
 %/config-devices.mak: default-configs/%.mak
-	$(call quiet-command,$(SHELL) $(SRC_PATH)/scripts/make_device_config.sh $@.tmp $<, "  GEN   $@.tmp")
+	$(call quiet-command, \
+            $(SHELL) $(SRC_PATH)/scripts/make_device_config.sh $< $*-config-devices.mak.d $@ > $@.tmp, "  GEN   $@.tmp")
 	$(call quiet-command, if test -f $@; then \
 	  if cmp -s $@.old $@; then \
 	    mv $@.tmp $@; \
@@ -330,8 +331,8 @@ distclean: clean
 	rm -rf $$d || exit 1 ; \
         done
 	rm -Rf .sdk
-	if test -f pixman/config.log; then make -C pixman distclean; fi
-	if test -f dtc/version_gen.h; then make $(DTC_MAKE_ARGS) clean; fi
+	if test -f pixman/config.log; then $(MAKE) -C pixman distclean; fi
+	if test -f dtc/version_gen.h; then $(MAKE) $(DTC_MAKE_ARGS) clean; fi
 
 KEYMAPS=da     en-gb  et  fr     fr-ch  is  lt  modifiers  no  pt-br  sv \
 ar      de     en-us  fi  fr-be  hr     it  lv  nl         pl  ru     th \
@@ -531,7 +532,7 @@ installer: $(INSTALLER)
 INSTDIR=/tmp/qemu-nsis
 
 $(INSTALLER): $(SRC_PATH)/qemu.nsi
-	make install prefix=${INSTDIR}
+	$(MAKE) install prefix=${INSTDIR}
 ifdef SIGNCODE
 	(cd ${INSTDIR}; \
          for i in *.exe; do \

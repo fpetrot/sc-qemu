@@ -51,9 +51,8 @@ typedef struct DigicBoard {
 
 static void digic4_board_setup_ram(DigicBoardState *s, hwaddr ram_size)
 {
-    memory_region_init_ram(&s->ram, NULL, "ram", ram_size, &error_abort);
+    memory_region_allocate_system_memory(&s->ram, NULL, "ram", ram_size);
     memory_region_add_subregion(get_system_memory(), 0, &s->ram);
-    vmstate_register_ram_global(&s->ram);
 }
 
 static void digic4_board_init(DigicBoard *board)
@@ -113,6 +112,7 @@ static void digic_load_rom(DigicBoardState *s, hwaddr addr,
             error_report("Couldn't load rom image '%s'.", filename);
             exit(1);
         }
+        g_free(fn);
     }
 }
 

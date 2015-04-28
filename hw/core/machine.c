@@ -223,6 +223,7 @@ static void machine_set_usb(Object *obj, bool value, Error **errp)
     MachineState *ms = MACHINE(obj);
 
     ms->usb = value;
+    ms->usb_disabled = !value;
 }
 
 static char *machine_get_firmware(Object *obj, Error **errp)
@@ -252,6 +253,20 @@ static void machine_set_iommu(Object *obj, bool value, Error **errp)
     MachineState *ms = MACHINE(obj);
 
     ms->iommu = value;
+}
+
+static void machine_set_suppress_vmdesc(Object *obj, bool value, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    ms->suppress_vmdesc = value;
+}
+
+static bool machine_get_suppress_vmdesc(Object *obj, Error **errp)
+{
+    MachineState *ms = MACHINE(obj);
+
+    return ms->suppress_vmdesc;
 }
 
 static int error_on_sysbus_device(SysBusDevice *sbdev, void *opaque)
@@ -376,6 +391,12 @@ static void machine_initfn(Object *obj)
                              machine_set_iommu, NULL);
     object_property_set_description(obj, "iommu",
                                     "Set on/off to enable/disable Intel IOMMU (VT-d)",
+                                    NULL);
+    object_property_add_bool(obj, "suppress-vmdesc",
+                             machine_get_suppress_vmdesc,
+                             machine_set_suppress_vmdesc, NULL);
+    object_property_set_description(obj, "suppress-vmdesc",
+                                    "Set on to disable self-describing migration",
                                     NULL);
 
     /* Register notifier when init is done for sysbus sanity checks */

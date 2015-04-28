@@ -126,6 +126,7 @@ bool kvm_gsi_routing_allowed;
 bool kvm_gsi_direct_mapping;
 bool kvm_allowed;
 bool kvm_readonly_mem_allowed;
+bool kvm_vm_attributes_allowed;
 
 static const KVMCapabilityInfo kvm_required_capabilites[] = {
     KVM_CAP_INFO(USER_MEMORY),
@@ -527,13 +528,33 @@ int kvm_vm_check_extension(KVMState *s, unsigned int extension)
     return ret;
 }
 
+static uint32_t adjust_ioeventfd_endianness(uint32_t val, uint32_t size)
+{
+#if defined(HOST_WORDS_BIGENDIAN) != defined(TARGET_WORDS_BIGENDIAN)
+    /* The kernel expects ioeventfd values in HOST_WORDS_BIGENDIAN
+     * endianness, but the memory core hands them in target endianness.
+     * For example, PPC is always treated as big-endian even if running
+     * on KVM and on PPC64LE.  Correct here.
+     */
+    switch (size) {
+    case 2:
+        val = bswap16(val);
+        break;
+    case 4:
+        val = bswap32(val);
+        break;
+    }
+#endif
+    return val;
+}
+
 static int kvm_set_ioeventfd_mmio(int fd, hwaddr addr, uint32_t val,
                                   bool assign, uint32_t size, bool datamatch)
 {
     int ret;
     struct kvm_ioeventfd iofd;
 
-    iofd.datamatch = datamatch ? val : 0;
+    iofd.datamatch = datamatch ? adjust_ioeventfd_endianness(val, size) : 0;
     iofd.addr = addr;
     iofd.len = size;
     iofd.flags = 0;
@@ -563,7 +584,7 @@ static int kvm_set_ioeventfd_pio(int fd, uint16_t addr, uint16_t val,
                                  bool assign, uint32_t size, bool datamatch)
 {
     struct kvm_ioeventfd kick = {
-        .datamatch = datamatch ? val : 0,
+        .datamatch = datamatch ? adjust_ioeventfd_endianness(val, size) : 0,
         .addr = addr,
         .flags = KVM_IOEVENTFD_FLAG_PIO,
         .len = size,
@@ -694,7 +715,7 @@ static void kvm_set_phys_mem(MemoryRegionSection *section, bool add)
 
         old = *mem;
 
-        if (mem->flags & KVM_MEM_LOG_DIRTY_PAGES) {
+        if ((mem->flags & KVM_MEM_LOG_DIRTY_PAGES) || s->migration_log) {
             kvm_physical_sync_dirty_bitmap(section);
         }
 
@@ -1598,6 +1619,9 @@ static int kvm_init(MachineState *ms)
     kvm_resamplefds_allowed =
         (kvm_check_extension(s, KVM_CAP_IRQFD_RESAMPLE) > 0);
 
+    kvm_vm_attributes_allowed =
+        (kvm_check_extension(s, KVM_CAP_VM_ATTRIBUTES) > 0);
+
     ret = kvm_arch_init(ms, s);
     if (ret < 0) {
         goto err;
@@ -1643,7 +1667,8 @@ static void kvm_handle_io(uint16_t port, void *data, int direction, int size,
     uint8_t *ptr = data;
 
     for (i = 0; i < count; i++) {
-        address_space_rw(&address_space_io, port, ptr, size,
+        address_space_rw(&address_space_io, port, MEMTXATTRS_UNSPECIFIED,
+                         ptr, size,
                          direction == KVM_EXIT_IO_OUT);
         ptr += size;
     }
@@ -1934,6 +1959,23 @@ int kvm_device_ioctl(int fd, int type, ...)
         ret = -errno;
     }
     return ret;
+}
+
+int kvm_vm_check_attr(KVMState *s, uint32_t group, uint64_t attr)
+{
+    int ret;
+    struct kvm_device_attr attribute = {
+        .group = group,
+        .attr = attr,
+    };
+
+    if (!kvm_vm_attributes_allowed) {
+        return 0;
+    }
+
+    ret = kvm_vm_ioctl(s, KVM_HAS_DEVICE_ATTR, &attribute);
+    /* kvm returns 0 on success for HAS_DEVICE_ATTR */
+    return ret ? 0 : 1;
 }
 
 int kvm_has_sync_mmu(void)

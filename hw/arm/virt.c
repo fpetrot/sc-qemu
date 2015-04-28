@@ -552,7 +552,8 @@ static void create_flash(const VirtBoardInfo *vbi)
     char *nodename;
 
     if (bios_name) {
-        const char *fn;
+        char *fn;
+        int image_size;
 
         if (drive_get(IF_PFLASH, 0, 0)) {
             error_report("The contents of the first flash device may be "
@@ -561,7 +562,13 @@ static void create_flash(const VirtBoardInfo *vbi)
             exit(1);
         }
         fn = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
-        if (!fn || load_image_targphys(fn, flashbase, flashsize) < 0) {
+        if (!fn) {
+            error_report("Could not find ROM image '%s'", bios_name);
+            exit(1);
+        }
+        image_size = load_image_targphys(fn, flashbase, flashsize);
+        g_free(fn);
+        if (image_size < 0) {
             error_report("Could not load ROM image '%s'", bios_name);
             exit(1);
         }
@@ -770,7 +777,7 @@ static void machvirt_init(MachineState *machine)
         cc->parse_features(CPU(cpuobj), cpuopts, &err);
         g_free(cpuopts);
         if (err) {
-            error_report("%s", error_get_pretty(err));
+            error_report_err(err);
             exit(1);
         }
 
@@ -798,9 +805,8 @@ static void machvirt_init(MachineState *machine)
     fdt_add_cpu_nodes(vbi);
     fdt_add_psci_node(vbi);
 
-    memory_region_init_ram(ram, NULL, "mach-virt.ram", machine->ram_size,
-                           &error_abort);
-    vmstate_register_ram_global(ram);
+    memory_region_allocate_system_memory(ram, NULL, "mach-virt.ram",
+                                         machine->ram_size);
     memory_region_add_subregion(sysmem, vbi->memmap[VIRT_MEM].base, ram);
 
     create_flash(vbi);

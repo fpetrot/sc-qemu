@@ -276,7 +276,6 @@ EQMP
         .args_type  = "device:O",
         .params     = "driver[,prop=value][,...]",
         .help       = "add device, like -device on the command line",
-        .user_print = monitor_user_noop,
         .mhandler.cmd_new = do_device_add,
     },
 
@@ -333,7 +332,7 @@ EQMP
 
     {
         .name       = "send-key",
-        .args_type  = "keys:O,hold-time:i?",
+        .args_type  = "keys:q,hold-time:i?",
         .mhandler.cmd_new = qmp_marshal_input_send_key,
     },
 
@@ -661,7 +660,36 @@ Example:
 <- { "return": {} }
 
 EQMP
-{
+
+    {
+        .name       = "migrate-incoming",
+        .args_type  = "uri:s",
+        .mhandler.cmd_new = qmp_marshal_input_migrate_incoming,
+    },
+
+SQMP
+migrate-incoming
+----------------
+
+Continue an incoming migration
+
+Arguments:
+
+- "uri": Source/listening URI (json-string)
+
+Example:
+
+-> { "execute": "migrate-incoming", "arguments": { "uri": "tcp::4446" } }
+<- { "return": {} }
+
+Notes:
+
+(1) QEMU must be started with -incoming defer to allow migrate-incoming to
+    be used
+(2) The uri format is the same as to -incoming
+
+EQMP
+    {
         .name       = "migrate-set-cache-size",
         .args_type  = "value:o",
         .mhandler.cmd_new = qmp_marshal_input_migrate_set_cache_size,
@@ -757,9 +785,7 @@ EQMP
         .args_type  = "protocol:s,hostname:s,port:i?,tls-port:i?,cert-subject:s?",
         .params     = "protocol hostname port tls-port cert-subject",
         .help       = "send migration info to spice/vnc client",
-        .user_print = monitor_user_noop,
-        .mhandler.cmd_async = client_migrate_info,
-        .flags      = MONITOR_CMD_ASYNC,
+        .mhandler.cmd_new = client_migrate_info,
     },
 
 SQMP
@@ -793,7 +819,6 @@ EQMP
         .args_type  = "paging:b,protocol:s,begin:i?,end:i?,format:s?",
         .params     = "-p protocol [begin] [length] [format]",
         .help       = "dump guest memory to file",
-        .user_print = monitor_user_noop,
         .mhandler.cmd_new = qmp_marshal_input_dump_guest_memory,
     },
 
@@ -1833,7 +1858,6 @@ EQMP
         .args_type  = "",
         .params     = "",
         .help       = "enable QMP capabilities",
-        .user_print = monitor_user_noop,
         .mhandler.cmd_new = do_qmp_capabilities,
     },
 
@@ -2125,7 +2149,7 @@ Each json-object contain the following:
          - "drv": driver format name (json-string)
              - Possible values: "blkdebug", "bochs", "cloop", "dmg",
                                 "file", "file", "ftp", "ftps", "host_cdrom",
-                                "host_device", "host_floppy", "http", "https",
+                                "host_device", "http", "https",
                                 "nbd", "parallels", "qcow", "qcow2", "raw",
                                 "tftp", "vdi", "vmdk", "vpc", "vvfat"
          - "backing_file": backing file name (json-string, optional)
@@ -3263,7 +3287,7 @@ EQMP
 
     {
         .name       = "migrate-set-capabilities",
-        .args_type  = "capabilities:O",
+        .args_type  = "capabilities:q",
         .params     = "capability:s,state:b",
 	.mhandler.cmd_new = qmp_marshal_input_migrate_set_capabilities,
     },
@@ -3610,6 +3634,10 @@ blockdev-add
 ------------
 
 Add a block device.
+
+This command is still a work in progress.  It doesn't support all
+block drivers, it lacks a matching blockdev-del, and more.  Stay away
+from it unless you want to help with its development.
 
 Arguments:
 

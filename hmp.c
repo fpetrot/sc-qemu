@@ -162,7 +162,8 @@ void hmp_info_migrate(Monitor *mon, const QDict *qdict)
     }
 
     if (info->has_status) {
-        monitor_printf(mon, "Migration status: %s\n", info->status);
+        monitor_printf(mon, "Migration status: %s\n",
+                       MigrationStatus_lookup[info->status]);
         monitor_printf(mon, "total time: %" PRIu64 " milliseconds\n",
                        info->total_time);
         if (info->has_expected_downtime) {
@@ -390,7 +391,8 @@ static void print_block_info(Monitor *mon, BlockInfo *info,
                         inserted->iops_size);
     }
 
-    if (verbose) {
+    /* TODO: inserted->image should never be null */
+    if (verbose && inserted->image) {
         monitor_printf(mon, "\nImages:\n");
         image_info = inserted->image;
         while (1) {
@@ -1116,6 +1118,16 @@ void hmp_migrate_cancel(Monitor *mon, const QDict *qdict)
     qmp_migrate_cancel(NULL);
 }
 
+void hmp_migrate_incoming(Monitor *mon, const QDict *qdict)
+{
+    Error *err = NULL;
+    const char *uri = qdict_get_str(qdict, "uri");
+
+    qmp_migrate_incoming(uri, &err);
+
+    hmp_handle_error(mon, &err);
+}
+
 void hmp_migrate_set_downtime(Monitor *mon, const QDict *qdict)
 {
     double value = qdict_get_double(qdict, "value");
@@ -1331,21 +1343,21 @@ void hmp_block_job_complete(Monitor *mon, const QDict *qdict)
     hmp_handle_error(mon, &error);
 }
 
-typedef struct MigrationStatus
+typedef struct HMPMigrationStatus
 {
     QEMUTimer *timer;
     Monitor *mon;
     bool is_block_migration;
-} MigrationStatus;
+} HMPMigrationStatus;
 
 static void hmp_migrate_status_cb(void *opaque)
 {
-    MigrationStatus *status = opaque;
+    HMPMigrationStatus *status = opaque;
     MigrationInfo *info;
 
     info = qmp_query_migrate(NULL);
-    if (!info->has_status || strcmp(info->status, "active") == 0 ||
-        strcmp(info->status, "setup") == 0) {
+    if (!info->has_status || info->status == MIGRATION_STATUS_ACTIVE ||
+        info->status == MIGRATION_STATUS_SETUP) {
         if (info->has_disk) {
             int progress;
 
@@ -1388,7 +1400,7 @@ void hmp_migrate(Monitor *mon, const QDict *qdict)
     }
 
     if (!detach) {
-        MigrationStatus *status;
+        HMPMigrationStatus *status;
 
         if (monitor_suspend(mon) < 0) {
             monitor_printf(mon, "terminal does not allow synchronous "
@@ -1851,4 +1863,51 @@ void hmp_info_memory_devices(Monitor *mon, const QDict *qdict)
     }
 
     qapi_free_MemoryDeviceInfoList(info_list);
+}
+
+void hmp_qom_list(Monitor *mon, const QDict *qdict)
+{
+    const char *path = qdict_get_try_str(qdict, "path");
+    ObjectPropertyInfoList *list;
+    Error *err = NULL;
+
+    if (path == NULL) {
+        monitor_printf(mon, "/\n");
+        return;
+    }
+
+    list = qmp_qom_list(path, &err);
+    if (err == NULL) {
+        ObjectPropertyInfoList *start = list;
+        while (list != NULL) {
+            ObjectPropertyInfo *value = list->value;
+
+            monitor_printf(mon, "%s (%s)\n",
+                           value->name, value->type);
+            list = list->next;
+        }
+        qapi_free_ObjectPropertyInfoList(start);
+    }
+    hmp_handle_error(mon, &err);
+}
+
+void hmp_qom_set(Monitor *mon, const QDict *qdict)
+{
+    const char *path = qdict_get_str(qdict, "path");
+    const char *property = qdict_get_str(qdict, "property");
+    const char *value = qdict_get_str(qdict, "value");
+    Error *err = NULL;
+    bool ambiguous = false;
+    Object *obj;
+
+    obj = object_resolve_path(path, &ambiguous);
+    if (obj == NULL) {
+        error_set(&err, QERR_DEVICE_NOT_FOUND, path);
+    } else {
+        if (ambiguous) {
+            monitor_printf(mon, "Warning: Path '%s' is ambiguous\n", path);
+        }
+        object_property_parse(obj, value, property, &err);
+    }
+    hmp_handle_error(mon, &err);
 }
