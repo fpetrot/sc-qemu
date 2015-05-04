@@ -1,5 +1,4 @@
 #include "hw/sysbus.h"
-#include "hw/arm/arm.h"
 #include "hw/devices.h"
 #include "net/net.h"
 #include "sysemu/sysemu.h"
@@ -12,6 +11,7 @@
 #include "qemu/error-report.h"
 
 #include "sc_machine.h"
+#include "target/target.h"
 
 /*
  * Used during QEMU initialisation only.
@@ -27,36 +27,13 @@ qemu_context * sc_qemu_machine_get_context(void)
     return ret;
 }
 
-static void init_arm_cpu(qemu_context *ctx, const char *model)
-{
-    ARMCPU *cpu;
-    char const *m = model;
-    int i;
-
-    if(model == NULL) {
-        m = "arm1176";
-    }
-
-    ctx->cpus = g_malloc0(sizeof(ARMCPU*) * smp_cpus);
-
-    for(i = 0; i < smp_cpus; i++) {
-        cpu = cpu_arm_init(m);
-        if (!cpu) {
-            fprintf(stderr, "Unable to find CPU definition\n");
-            exit(1);
-        }
-
-        ctx->cpus[i] = cpu;
-    }
-}
-
 static void sc_qemu_machine_init(MachineState *machine)
 {
     qemu_context *ctx;
 
     ctx = g_malloc0(sizeof(qemu_context));
 
-    init_arm_cpu(ctx, machine->cpu_model);
+    sc_qemu_machine_init_target(ctx, machine->cpu_model);
 
     inited_context = ctx;
 }
