@@ -3,7 +3,6 @@
 #include "hw/sysbus.h"
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
-#include "hw/arm/arm.h"
 #include "exec/gdbstub.h"
 
 #include "sc_qemu.h"
