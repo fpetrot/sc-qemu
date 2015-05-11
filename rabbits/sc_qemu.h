@@ -25,12 +25,8 @@ typedef struct sc_qemu_init_struct sc_qemu_init_struct;
 typedef qemu_context* (*sc_qemu_init_fn)(sc_qemu_init_struct *);
 
 typedef enum sc_qemu_qdev_e {
-    /* Variadic initialisation :
-     *  - number of interrupts, uint32_t
-     * MMIO Mapping :
-     *  0: GIC  base address
-     */
-    SC_QDEV_A15PRIV = 0,
+    /* Cannot be created by qdev_create. Use cpu_get_qdev */
+    SC_QDEV_CPU = 0,
 
     /* Variadic initialisation :
      *  - base address, uint32_t
@@ -47,14 +43,18 @@ typedef enum sc_qemu_qdev_e {
      *  0: sp804 base address
      */
     SC_QDEV_SP804,
+
+    /* Keep it at the end */
+    SC_QDEV_LAST,
+
 } sc_qemu_qdev_e;
 
 typedef bool (*sc_qemu_cpu_loop_fn)(qemu_context *);
-typedef void (*sc_qemu_irq_update_fn)(qemu_context *, int cpu_idx, int irq_idx, int level);
+typedef sc_qemu_qdev* (*sc_qemu_cpu_get_qdev_fn)(qemu_context *, int cpu_idx);
 typedef void (*sc_qemu_map_io_fn)(qemu_context *, uint32_t base_address, uint32_t size);
 typedef void (*sc_qemu_map_dmi_fn)(qemu_context *, uint32_t base_address, uint32_t size, void *data);
 typedef void (*sc_qemu_start_gdbserver_fn)(qemu_context *, const char *port);
-typedef sc_qemu_qdev* (*sc_qemu_qdev_create_fn)(qemu_context *, sc_qemu_qdev_e, ...);
+typedef sc_qemu_qdev* (*sc_qemu_qdev_create_fn)(qemu_context *, int qdev_id, ...);
 typedef void (*sc_qemu_qdev_mmio_map_fn)(sc_qemu_qdev *dev, int mmio_id, uint32_t addr);
 typedef void (*sc_qemu_qdev_irq_connect_fn)(sc_qemu_qdev *src, int src_idx, sc_qemu_qdev *dst, int dst_idx);
 typedef void (*sc_qemu_qdev_irq_update_fn)(sc_qemu_qdev *dev, int irq_idx, int level);
@@ -63,18 +63,19 @@ typedef uint32_t (*qemu_sc_read_fn)(void *opaque, uint32_t addr, uint32_t size);
 typedef void (*qemu_sc_write_fn)(void *opaque, uint32_t addr, uint32_t val, uint32_t size);
 
 #include "sc_qdev.h"
-#include "sc_qemu_arm.h"
+#include "target/arm.h"
+#include "target/riscv.h"
 
 struct qemu_import {
-    sc_qemu_cpu_loop_fn         cpu_loop;
-    sc_qemu_irq_update_fn       irq_update;
-    sc_qemu_map_io_fn           map_io;
-    sc_qemu_map_dmi_fn          map_dmi;
-    sc_qemu_start_gdbserver_fn  start_gdbserver;
-    sc_qemu_qdev_create_fn      qdev_create;
-    sc_qemu_qdev_mmio_map_fn    qdev_mmio_map;
-    sc_qemu_qdev_irq_connect_fn qdev_irq_connect;
-    sc_qemu_qdev_irq_update_fn  qdev_irq_update;
+    sc_qemu_cpu_loop_fn         cpu_loop;           /* < Run the CPUs */
+    sc_qemu_cpu_get_qdev_fn     cpu_get_qdev;       /* < Get the qdev corresponding to a cpu */
+    sc_qemu_map_io_fn           map_io;             /* < Map a memory area as io */
+    sc_qemu_map_dmi_fn          map_dmi;            /* < Map a memory area with direct memory access */
+    sc_qemu_start_gdbserver_fn  start_gdbserver;    /* < Start a gdb server on the given port */
+    sc_qemu_qdev_create_fn      qdev_create;        /* < Create a new QEMU device */
+    sc_qemu_qdev_mmio_map_fn    qdev_mmio_map;      /* < Map a qdev to a memory area */
+    sc_qemu_qdev_irq_connect_fn qdev_irq_connect;   /* < Connect irq lines of two qdevs */
+    sc_qemu_qdev_irq_update_fn  qdev_irq_update;    /* < Update a qdev input irq line */
 };
 
 struct systemc_import {

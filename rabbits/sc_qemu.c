@@ -8,6 +8,7 @@
 #include "sc_qemu.h"
 #include "sc_machine.h"
 #include "qemu_context.h"
+#include "sc_qdev_priv.h"
 
 qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s);
 
@@ -54,14 +55,17 @@ static bool sc_qemu_cpu_loop(qemu_context *ctx)
     return main_loop_should_exit();
 }
 
-static void sc_qemu_irq_update(qemu_context *ctx, int cpu_idx,
-                               int irq_idx, int level)
+static sc_qemu_qdev* sc_qemu_cpu_get_qdev(qemu_context *ctx, int cpu_idx)
 {
-    qemu_irq i;
+    sc_qemu_qdev *ret = NULL;
 
-    i = qdev_get_gpio_in(DEVICE(ctx->cpus[cpu_idx]), irq_idx);
+    ret = g_malloc(sizeof(sc_qemu_qdev));
 
-    qemu_set_irq(i, level);
+    ret->ctx = ctx;
+    ret->id = SC_QDEV_CPU;
+    ret->dev = DEVICE(ctx->cpus[cpu_idx]);
+
+    return ret;
 }
 
 static void sc_qemu_map_io(qemu_context *ctx, uint32_t base_address,
@@ -129,7 +133,7 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 
     /* SystemC to QEMU fonctions */
     s->q_import->cpu_loop = sc_qemu_cpu_loop;
-    s->q_import->irq_update = sc_qemu_irq_update;
+    s->q_import->cpu_get_qdev = sc_qemu_cpu_get_qdev;
     s->q_import->map_io = sc_qemu_map_io;
     s->q_import->map_dmi = sc_qemu_map_dmi;
     s->q_import->start_gdbserver = sc_qemu_start_gdbserver;

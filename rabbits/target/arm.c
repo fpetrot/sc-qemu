@@ -2,6 +2,7 @@
 #include "sysemu/sysemu.h"
 
 #include "target.h"
+#include "arm.h"
 #include "../sc_qemu.h"
 #include "../sc_qdev_priv.h"
 
@@ -34,7 +35,7 @@ void sc_qemu_target_qdev_create(sc_qemu_qdev *ret, sc_qemu_qdev_e devid, va_list
     int i;
 
     switch(devid) {
-    case SC_QDEV_A15PRIV:
+    case SC_QDEV_ARM_A15PRIV:
         u = va_arg(ap, uint32_t); /* num-irq property */
         ret->dev = qdev_create(NULL, "a15mpcore_priv");
 

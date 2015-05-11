@@ -8,7 +8,7 @@
 #include "qemu_context.h"
 #include "target/target.h"
 
-sc_qemu_qdev* sc_qemu_qdev_create(qemu_context *ctx, sc_qemu_qdev_e devid, ...)
+sc_qemu_qdev* sc_qemu_qdev_create(qemu_context *ctx, int devid, ...)
 {
     sc_qemu_qdev *ret = NULL;
     va_list ap;
