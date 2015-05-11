@@ -64,7 +64,6 @@ typedef void (*qemu_sc_write_fn)(void *opaque, uint32_t addr, uint32_t val, uint
 
 #include "sc_qdev.h"
 #include "target/arm.h"
-#include "target/riscv.h"
 
 struct qemu_import {
     sc_qemu_cpu_loop_fn         cpu_loop;           /* < Run the CPUs */
