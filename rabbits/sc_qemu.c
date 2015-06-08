@@ -7,7 +7,7 @@
 
 #include "sc_qemu.h"
 #include "sc_machine.h"
-#include "qemu_context.h"
+#include "qemu_context_priv.h"
 #include "sc_qdev_priv.h"
 
 qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s);
@@ -141,6 +141,9 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
     s->q_import->qdev_mmio_map = sc_qemu_qdev_mmio_map;
     s->q_import->qdev_irq_connect = sc_qemu_qdev_irq_connect;
     s->q_import->qdev_irq_update = sc_qemu_qdev_irq_update;
+    s->q_import->char_dev_create = sc_qemu_char_dev_create;
+    s->q_import->char_dev_write = sc_qemu_char_dev_write;
+    s->q_import->char_dev_register_read = sc_qemu_char_dev_register_read;
 
     ctx = sc_qemu_machine_get_context();
 

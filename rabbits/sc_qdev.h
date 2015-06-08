@@ -1,7 +1,7 @@
 #ifndef _RABBITS_SC_QDEV_H
 #define _RABBITS_SC_QDEV_H
 
-#include "sc_qemu.h"
+#include "typedefs.h"
 
 sc_qemu_qdev* sc_qemu_qdev_create(qemu_context *ctx, int devid, ...);
 void sc_qemu_qdev_mmio_map(sc_qemu_qdev *dev, int mmio_id, uint32_t addr);

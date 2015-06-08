@@ -5,7 +5,7 @@
 #include "exec/address-spaces.h"
 
 #include "sc_qdev_priv.h"
-#include "qemu_context.h"
+#include "qemu_context_priv.h"
 #include "target/target.h"
 
 sc_qemu_qdev* sc_qemu_qdev_create(qemu_context *ctx, int devid, ...)
