@@ -14,12 +14,13 @@
  */
 
 #include "qemu-common.h"
+#include "qemu/error-report.h"
 #include "qemu/main-loop.h"
 #include "migration/migration.h"
-#include "monitor/monitor.h"
 #include "migration/qemu-file.h"
 #include "sysemu/sysemu.h"
 #include "block/block.h"
+#include "qapi/qmp/qerror.h"
 #include "qemu/sockets.h"
 #include "migration/block.h"
 #include "qemu/thread.h"
@@ -33,6 +34,14 @@
 #define BUFFER_DELAY     100
 #define XFER_LIMIT_RATIO (1000 / BUFFER_DELAY)
 
+/* Default compression thread count */
+#define DEFAULT_MIGRATE_COMPRESS_THREAD_COUNT 8
+/* Default decompression thread count, usually decompression is at
+ * least 4 times as fast as compression.*/
+#define DEFAULT_MIGRATE_DECOMPRESS_THREAD_COUNT 2
+/*0: means nocompress, 1: best speed, ... 9: best compress ratio */
+#define DEFAULT_MIGRATE_COMPRESS_LEVEL 1
+
 /* Migration XBZRLE default cache size */
 #define DEFAULT_MIGRATE_CACHE_SIZE (64 * 1024 * 1024)
 
@@ -45,6 +54,7 @@ static bool deferred_incoming;
    migrations at once.  For now we don't need to add
    dynamic creation of migration */
 
+/* For outgoing */
 MigrationState *migrate_get_current(void)
 {
     static MigrationState current_migration = {
@@ -52,9 +62,39 @@ MigrationState *migrate_get_current(void)
         .bandwidth_limit = MAX_THROTTLE,
         .xbzrle_cache_size = DEFAULT_MIGRATE_CACHE_SIZE,
         .mbps = -1,
+        .parameters[MIGRATION_PARAMETER_COMPRESS_LEVEL] =
+                DEFAULT_MIGRATE_COMPRESS_LEVEL,
+        .parameters[MIGRATION_PARAMETER_COMPRESS_THREADS] =
+                DEFAULT_MIGRATE_COMPRESS_THREAD_COUNT,
+        .parameters[MIGRATION_PARAMETER_DECOMPRESS_THREADS] =
+                DEFAULT_MIGRATE_DECOMPRESS_THREAD_COUNT,
     };
 
     return &current_migration;
+}
+
+/* For incoming */
+static MigrationIncomingState *mis_current;
+
+MigrationIncomingState *migration_incoming_get_current(void)
+{
+    return mis_current;
+}
+
+MigrationIncomingState *migration_incoming_state_new(QEMUFile* f)
+{
+    mis_current = g_malloc0(sizeof(MigrationIncomingState));
+    mis_current->file = f;
+    QLIST_INIT(&mis_current->loadvm_handlers);
+
+    return mis_current;
+}
+
+void migration_incoming_state_destroy(void)
+{
+    loadvm_free_handlers(mis_current);
+    g_free(mis_current);
+    mis_current = NULL;
 }
 
 /*
@@ -101,11 +141,17 @@ static void process_incoming_migration_co(void *opaque)
     Error *local_err = NULL;
     int ret;
 
+    migration_incoming_state_new(f);
+
     ret = qemu_loadvm_state(f);
+
     qemu_fclose(f);
     free_xbzrle_decoded_buf();
+    migration_incoming_state_destroy();
+
     if (ret < 0) {
         error_report("load of migration failed: %s", strerror(-ret));
+        migrate_decompress_threads_join();
         exit(EXIT_FAILURE);
     }
     qemu_announce_self();
@@ -114,6 +160,7 @@ static void process_incoming_migration_co(void *opaque)
     bdrv_invalidate_cache_all(&local_err);
     if (local_err) {
         error_report_err(local_err);
+        migrate_decompress_threads_join();
         exit(EXIT_FAILURE);
     }
 
@@ -122,6 +169,7 @@ static void process_incoming_migration_co(void *opaque)
     } else {
         runstate_set(RUN_STATE_PAUSED);
     }
+    migrate_decompress_threads_join();
 }
 
 void process_incoming_migration(QEMUFile *f)
@@ -130,6 +178,7 @@ void process_incoming_migration(QEMUFile *f)
     int fd = qemu_get_fd(f);
 
     assert(fd != -1);
+    migrate_decompress_threads_create();
     qemu_set_nonblock(fd);
     qemu_coroutine_enter(co, f);
 }
@@ -168,6 +217,21 @@ MigrationCapabilityStatusList *qmp_query_migrate_capabilities(Error **errp)
     }
 
     return head;
+}
+
+MigrationParameters *qmp_query_migrate_parameters(Error **errp)
+{
+    MigrationParameters *params;
+    MigrationState *s = migrate_get_current();
+
+    params = g_malloc0(sizeof(*params));
+    params->compress_level = s->parameters[MIGRATION_PARAMETER_COMPRESS_LEVEL];
+    params->compress_threads =
+            s->parameters[MIGRATION_PARAMETER_COMPRESS_THREADS];
+    params->decompress_threads =
+            s->parameters[MIGRATION_PARAMETER_DECOMPRESS_THREADS];
+
+    return params;
 }
 
 static void get_xbzrle_cache_stats(MigrationInfo *info)
@@ -274,12 +338,53 @@ void qmp_migrate_set_capabilities(MigrationCapabilityStatusList *params,
 
     if (s->state == MIGRATION_STATUS_ACTIVE ||
         s->state == MIGRATION_STATUS_SETUP) {
-        error_set(errp, QERR_MIGRATION_ACTIVE);
+        error_setg(errp, QERR_MIGRATION_ACTIVE);
         return;
     }
 
     for (cap = params; cap; cap = cap->next) {
         s->enabled_capabilities[cap->value->capability] = cap->value->state;
+    }
+}
+
+void qmp_migrate_set_parameters(bool has_compress_level,
+                                int64_t compress_level,
+                                bool has_compress_threads,
+                                int64_t compress_threads,
+                                bool has_decompress_threads,
+                                int64_t decompress_threads, Error **errp)
+{
+    MigrationState *s = migrate_get_current();
+
+    if (has_compress_level && (compress_level < 0 || compress_level > 9)) {
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "compress_level",
+                   "is invalid, it should be in the range of 0 to 9");
+        return;
+    }
+    if (has_compress_threads &&
+            (compress_threads < 1 || compress_threads > 255)) {
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
+                   "compress_threads",
+                   "is invalid, it should be in the range of 1 to 255");
+        return;
+    }
+    if (has_decompress_threads &&
+            (decompress_threads < 1 || decompress_threads > 255)) {
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
+                   "decompress_threads",
+                   "is invalid, it should be in the range of 1 to 255");
+        return;
+    }
+
+    if (has_compress_level) {
+        s->parameters[MIGRATION_PARAMETER_COMPRESS_LEVEL] = compress_level;
+    }
+    if (has_compress_threads) {
+        s->parameters[MIGRATION_PARAMETER_COMPRESS_THREADS] = compress_threads;
+    }
+    if (has_decompress_threads) {
+        s->parameters[MIGRATION_PARAMETER_DECOMPRESS_THREADS] =
+                                                    decompress_threads;
     }
 }
 
@@ -305,6 +410,7 @@ static void migrate_fd_cleanup(void *opaque)
         qemu_thread_join(&s->thread);
         qemu_mutex_lock_iothread();
 
+        migrate_compress_threads_join();
         qemu_fclose(s->file);
         s->file = NULL;
     }
@@ -390,6 +496,11 @@ static MigrationState *migrate_init(const MigrationParams *params)
     int64_t bandwidth_limit = s->bandwidth_limit;
     bool enabled_capabilities[MIGRATION_CAPABILITY_MAX];
     int64_t xbzrle_cache_size = s->xbzrle_cache_size;
+    int compress_level = s->parameters[MIGRATION_PARAMETER_COMPRESS_LEVEL];
+    int compress_thread_count =
+            s->parameters[MIGRATION_PARAMETER_COMPRESS_THREADS];
+    int decompress_thread_count =
+            s->parameters[MIGRATION_PARAMETER_DECOMPRESS_THREADS];
 
     memcpy(enabled_capabilities, s->enabled_capabilities,
            sizeof(enabled_capabilities));
@@ -400,6 +511,11 @@ static MigrationState *migrate_init(const MigrationParams *params)
            sizeof(enabled_capabilities));
     s->xbzrle_cache_size = xbzrle_cache_size;
 
+    s->parameters[MIGRATION_PARAMETER_COMPRESS_LEVEL] = compress_level;
+    s->parameters[MIGRATION_PARAMETER_COMPRESS_THREADS] =
+               compress_thread_count;
+    s->parameters[MIGRATION_PARAMETER_DECOMPRESS_THREADS] =
+               decompress_thread_count;
     s->bandwidth_limit = bandwidth_limit;
     s->state = MIGRATION_STATUS_SETUP;
     trace_migrate_set_state(MIGRATION_STATUS_SETUP);
@@ -458,7 +574,7 @@ void qmp_migrate(const char *uri, bool has_blk, bool blk,
     if (s->state == MIGRATION_STATUS_ACTIVE ||
         s->state == MIGRATION_STATUS_SETUP ||
         s->state == MIGRATION_STATUS_CANCELLING) {
-        error_set(errp, QERR_MIGRATION_ACTIVE);
+        error_setg(errp, QERR_MIGRATION_ACTIVE);
         return;
     }
 
@@ -493,7 +609,8 @@ void qmp_migrate(const char *uri, bool has_blk, bool blk,
         fd_start_outgoing_migration(s, p, &local_err);
 #endif
     } else {
-        error_set(errp, QERR_INVALID_PARAMETER_VALUE, "uri", "a valid migration protocol");
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "uri",
+                   "a valid migration protocol");
         s->state = MIGRATION_STATUS_FAILED;
         return;
     }
@@ -517,22 +634,22 @@ void qmp_migrate_set_cache_size(int64_t value, Error **errp)
 
     /* Check for truncation */
     if (value != (size_t)value) {
-        error_set(errp, QERR_INVALID_PARAMETER_VALUE, "cache size",
-                  "exceeding address space");
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "cache size",
+                   "exceeding address space");
         return;
     }
 
     /* Cache should not be larger than guest ram size */
     if (value > ram_bytes_total()) {
-        error_set(errp, QERR_INVALID_PARAMETER_VALUE, "cache size",
-                  "exceeds guest ram size ");
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "cache size",
+                   "exceeds guest ram size ");
         return;
     }
 
     new_size = xbzrle_cache_resize(value);
     if (new_size < 0) {
-        error_set(errp, QERR_INVALID_PARAMETER_VALUE, "cache size",
-                  "is smaller than page size");
+        error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "cache size",
+                   "is smaller than page size");
         return;
     }
 
@@ -587,6 +704,42 @@ bool migrate_zero_blocks(void)
     return s->enabled_capabilities[MIGRATION_CAPABILITY_ZERO_BLOCKS];
 }
 
+bool migrate_use_compression(void)
+{
+    MigrationState *s;
+
+    s = migrate_get_current();
+
+    return s->enabled_capabilities[MIGRATION_CAPABILITY_COMPRESS];
+}
+
+int migrate_compress_level(void)
+{
+    MigrationState *s;
+
+    s = migrate_get_current();
+
+    return s->parameters[MIGRATION_PARAMETER_COMPRESS_LEVEL];
+}
+
+int migrate_compress_threads(void)
+{
+    MigrationState *s;
+
+    s = migrate_get_current();
+
+    return s->parameters[MIGRATION_PARAMETER_COMPRESS_THREADS];
+}
+
+int migrate_decompress_threads(void)
+{
+    MigrationState *s;
+
+    s = migrate_get_current();
+
+    return s->parameters[MIGRATION_PARAMETER_DECOMPRESS_THREADS];
+}
+
 int migrate_use_xbzrle(void)
 {
     MigrationState *s;
@@ -617,6 +770,7 @@ static void *migration_thread(void *opaque)
     int64_t start_time = initial_time;
     bool old_vm_running = false;
 
+    qemu_savevm_state_header(s->file);
     qemu_savevm_state_begin(s->file, &s->params);
 
     s->setup_time = qemu_clock_get_ms(QEMU_CLOCK_HOST) - setup_start;
@@ -717,9 +871,6 @@ static void *migration_thread(void *opaque)
 
 void migrate_fd_connect(MigrationState *s)
 {
-    s->state = MIGRATION_STATUS_SETUP;
-    trace_migrate_set_state(MIGRATION_STATUS_SETUP);
-
     /* This is a best 1st approximation. ns to ms */
     s->expected_downtime = max_downtime/1000000;
     s->cleanup_bh = qemu_bh_new(migrate_fd_cleanup, s);
@@ -730,6 +881,7 @@ void migrate_fd_connect(MigrationState *s)
     /* Notify before starting migration thread */
     notifier_list_notify(&migration_state_notifiers, s);
 
+    migrate_compress_threads_create();
     qemu_thread_create(&s->thread, "migration", migration_thread, s,
                        QEMU_THREAD_JOINABLE);
 }

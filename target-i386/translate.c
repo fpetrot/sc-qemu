@@ -631,13 +631,13 @@ static void gen_helper_in_func(TCGMemOp ot, TCGv v, TCGv_i32 n)
 {
     switch (ot) {
     case MO_8:
-        gen_helper_inb(v, n);
+        gen_helper_inb(v, cpu_env, n);
         break;
     case MO_16:
-        gen_helper_inw(v, n);
+        gen_helper_inw(v, cpu_env, n);
         break;
     case MO_32:
-        gen_helper_inl(v, n);
+        gen_helper_inl(v, cpu_env, n);
         break;
     default:
         tcg_abort();
@@ -648,13 +648,13 @@ static void gen_helper_out_func(TCGMemOp ot, TCGv_i32 v, TCGv_i32 n)
 {
     switch (ot) {
     case MO_8:
-        gen_helper_outb(v, n);
+        gen_helper_outb(cpu_env, v, n);
         break;
     case MO_16:
-        gen_helper_outw(v, n);
+        gen_helper_outw(cpu_env, v, n);
         break;
     case MO_32:
-        gen_helper_outl(v, n);
+        gen_helper_outl(cpu_env, v, n);
         break;
     default:
         tcg_abort();
@@ -8093,7 +8093,7 @@ done_generating:
         else
 #endif
             disas_flags = !dc->code32;
-        log_target_disas(env, pc_start, pc_ptr - pc_start, disas_flags);
+        log_target_disas(cs, pc_start, pc_ptr - pc_start, disas_flags);
         qemu_log("\n");
     }
 #endif

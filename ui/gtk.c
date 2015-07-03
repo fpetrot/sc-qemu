@@ -34,24 +34,11 @@
 #define GETTEXT_PACKAGE "qemu"
 #define LOCALEDIR "po"
 
-#ifdef _WIN32
-# define _WIN32_WINNT 0x0601 /* needed to get definition of MAPVK_VK_TO_VSC */
-#endif
-
 #include "qemu-common.h"
 
-#ifdef CONFIG_PRAGMA_DIAGNOSTIC_AVAILABLE
-/* Work around an -Wstrict-prototypes warning in GTK headers */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wstrict-prototypes"
-#endif
-#include <gtk/gtk.h>
-#ifdef CONFIG_PRAGMA_DIAGNOSTIC_AVAILABLE
-#pragma GCC diagnostic pop
-#endif
+#include "ui/console.h"
+#include "ui/gtk.h"
 
-
-#include <gdk/gdkkeysyms.h>
 #include <glib/gi18n.h>
 #include <locale.h>
 #if defined(CONFIG_VTE)
@@ -60,7 +47,6 @@
 #include <math.h>
 
 #include "trace.h"
-#include "ui/console.h"
 #include "ui/input.h"
 #include "sysemu/sysemu.h"
 #include "qmp-commands.h"
@@ -68,10 +54,6 @@
 #include "keymaps.h"
 #include "sysemu/char.h"
 #include "qom/object.h"
-#ifdef GDK_WINDOWING_X11
-#include <gdk/gdkx.h>
-#include <X11/XKBlib.h>
-#endif
 
 #define MAX_VCS 10
 #define VC_WINDOW_X_MIN  320
@@ -97,15 +79,6 @@
  * Luckily everything works smooth in gtk3.
  */
 # define VTE_RESIZE_HACK 1
-#endif
-
-/* Compatibility define to let us build on both Gtk2 and Gtk3 */
-#if GTK_CHECK_VERSION(3, 0, 0)
-static inline void gdk_drawable_get_size(GdkWindow *w, gint *ww, gint *wh)
-{
-    *ww = gdk_window_get_width(w);
-    *wh = gdk_window_get_height(w);
-}
 #endif
 
 #if !GTK_CHECK_VERSION(2, 20, 0)
@@ -137,48 +110,6 @@ static const int modifier_keycode[] = {
     /* shift, control, alt keys, meta keys, both left & right */
     0x2a, 0x36, 0x1d, 0x9d, 0x38, 0xb8, 0xdb, 0xdd,
 };
-
-typedef struct GtkDisplayState GtkDisplayState;
-
-typedef struct VirtualGfxConsole {
-    GtkWidget *drawing_area;
-    DisplayChangeListener dcl;
-    DisplaySurface *ds;
-    pixman_image_t *convert;
-    cairo_surface_t *surface;
-    double scale_x;
-    double scale_y;
-} VirtualGfxConsole;
-
-#if defined(CONFIG_VTE)
-typedef struct VirtualVteConsole {
-    GtkWidget *box;
-    GtkWidget *scrollbar;
-    GtkWidget *terminal;
-    CharDriverState *chr;
-} VirtualVteConsole;
-#endif
-
-typedef enum VirtualConsoleType {
-    GD_VC_GFX,
-    GD_VC_VTE,
-} VirtualConsoleType;
-
-typedef struct VirtualConsole {
-    GtkDisplayState *s;
-    char *label;
-    GtkWidget *window;
-    GtkWidget *menu_item;
-    GtkWidget *tab_item;
-    GtkWidget *focus;
-    VirtualConsoleType type;
-    union {
-        VirtualGfxConsole gfx;
-#if defined(CONFIG_VTE)
-        VirtualVteConsole vte;
-#endif
-    };
-} VirtualConsole;
 
 struct GtkDisplayState {
     GtkWidget *window;
@@ -408,7 +339,7 @@ static void gd_update_geometry_hints(VirtualConsole *vc)
     gtk_window_set_geometry_hints(geo_window, geo_widget, &geo, mask);
 }
 
-static void gd_update_windowsize(VirtualConsole *vc)
+void gd_update_windowsize(VirtualConsole *vc)
 {
     GtkDisplayState *s = vc->s;
 
@@ -532,6 +463,8 @@ static void gd_mouse_set(DisplayChangeListener *dcl,
     gdk_device_warp(gdk_device_manager_get_client_pointer(mgr),
                     gtk_widget_get_screen(vc->gfx.drawing_area),
                     x_root, y_root);
+    vc->s->last_x = x;
+    vc->s->last_y = y;
 }
 #else
 static void gd_mouse_set(DisplayChangeListener *dcl,
@@ -648,6 +581,33 @@ static void gd_switch(DisplayChangeListener *dcl,
     }
 }
 
+static const DisplayChangeListenerOps dcl_ops = {
+    .dpy_name             = "gtk",
+    .dpy_gfx_update       = gd_update,
+    .dpy_gfx_switch       = gd_switch,
+    .dpy_gfx_check_format = qemu_pixman_check_format,
+    .dpy_refresh          = gd_refresh,
+    .dpy_mouse_set        = gd_mouse_set,
+    .dpy_cursor_define    = gd_cursor_define,
+};
+
+
+#if defined(CONFIG_OPENGL)
+
+/** DisplayState Callbacks (opengl version) **/
+
+static const DisplayChangeListenerOps dcl_egl_ops = {
+    .dpy_name             = "gtk-egl",
+    .dpy_gfx_update       = gd_egl_update,
+    .dpy_gfx_switch       = gd_egl_switch,
+    .dpy_gfx_check_format = console_gl_check_format,
+    .dpy_refresh          = gd_egl_refresh,
+    .dpy_mouse_set        = gd_mouse_set,
+    .dpy_cursor_define    = gd_cursor_define,
+};
+
+#endif
+
 /** QEMU Events **/
 
 static void gd_change_runstate(void *opaque, int running, RunState state)
@@ -703,6 +663,13 @@ static gboolean gd_draw_event(GtkWidget *widget, cairo_t *cr, void *opaque)
     int mx, my;
     int ww, wh;
     int fbw, fbh;
+
+#if defined(CONFIG_OPENGL)
+    if (vc->gfx.gls) {
+        gd_egl_draw(vc);
+        return TRUE;
+    }
+#endif
 
     if (!gtk_widget_get_realized(widget)) {
         return FALSE;
@@ -1478,6 +1445,19 @@ static gboolean gd_focus_out_event(GtkWidget *widget,
     return TRUE;
 }
 
+static gboolean gd_configure(GtkWidget *widget,
+                             GdkEventConfigure *cfg, gpointer opaque)
+{
+    VirtualConsole *vc = opaque;
+    QemuUIInfo info;
+
+    memset(&info, 0, sizeof(info));
+    info.width = cfg->width;
+    info.height = cfg->height;
+    dpy_set_ui_info(vc->gfx.dcl.con, &info);
+    return FALSE;
+}
+
 /** Virtual Console Callbacks **/
 
 static GSList *gd_vc_menu_init(GtkDisplayState *s, VirtualConsole *vc,
@@ -1655,6 +1635,8 @@ static void gd_connect_vc_gfx_signals(VirtualConsole *vc)
                          G_CALLBACK(gd_leave_event), vc);
         g_signal_connect(vc->gfx.drawing_area, "focus-out-event",
                          G_CALLBACK(gd_focus_out_event), vc);
+        g_signal_connect(vc->gfx.drawing_area, "configure-event",
+                         G_CALLBACK(gd_configure), vc);
     } else {
         g_signal_connect(vc->gfx.drawing_area, "key-press-event",
                          G_CALLBACK(gd_text_key_down), vc);
@@ -1728,16 +1710,6 @@ static GtkWidget *gd_create_menu_machine(GtkDisplayState *s)
     return machine_menu;
 }
 
-static const DisplayChangeListenerOps dcl_ops = {
-    .dpy_name             = "gtk",
-    .dpy_gfx_update       = gd_update,
-    .dpy_gfx_switch       = gd_switch,
-    .dpy_gfx_check_format = qemu_pixman_check_format,
-    .dpy_refresh          = gd_refresh,
-    .dpy_mouse_set        = gd_mouse_set,
-    .dpy_cursor_define    = gd_cursor_define,
-};
-
 static GSList *gd_vc_gfx_init(GtkDisplayState *s, VirtualConsole *vc,
                               QemuConsole *con, int idx,
                               GSList *group, GtkWidget *view_menu)
@@ -1765,12 +1737,38 @@ static GSList *gd_vc_gfx_init(GtkDisplayState *s, VirtualConsole *vc,
     gtk_notebook_append_page(GTK_NOTEBOOK(s->notebook),
                              vc->tab_item, gtk_label_new(vc->label));
 
-    vc->gfx.dcl.ops = &dcl_ops;
+#if defined(CONFIG_OPENGL)
+    if (display_opengl) {
+        /*
+         * gtk_widget_set_double_buffered() was deprecated in 3.14.
+         * It is required for opengl rendering on X11 though.  A
+         * proper replacement (native opengl support) is only
+         * available in 3.16+.  Silence the warning if possible.
+         */
+#ifdef CONFIG_PRAGMA_DIAGNOSTIC_AVAILABLE
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+        gtk_widget_set_double_buffered(vc->gfx.drawing_area, FALSE);
+#ifdef CONFIG_PRAGMA_DIAGNOSTIC_AVAILABLE
+#pragma GCC diagnostic pop
+#endif
+        vc->gfx.dcl.ops = &dcl_egl_ops;
+    } else
+#endif
+    {
+        vc->gfx.dcl.ops = &dcl_ops;
+    }
+
     vc->gfx.dcl.con = con;
     register_displaychangelistener(&vc->gfx.dcl);
 
     gd_connect_vc_gfx_signals(vc);
     group = gd_vc_menu_init(s, vc, idx, group, view_menu);
+
+    if (dpy_ui_info_supported(vc->gfx.dcl.con)) {
+        gtk_menu_item_activate(GTK_MENU_ITEM(s->zoom_fit_item));
+    }
 
     return group;
 }
@@ -1919,12 +1917,18 @@ static void gd_set_keycode_type(GtkDisplayState *s)
 #endif
 }
 
+static gboolean gtkinit;
+
 void gtk_display_init(DisplayState *ds, bool full_screen, bool grab_on_hover)
 {
     GtkDisplayState *s = g_malloc0(sizeof(*s));
     char *filename;
+    GdkDisplay *window_display;
 
-    gtk_init(NULL, NULL);
+    if (!gtkinit) {
+        fprintf(stderr, "gtk initialization failed\n");
+        exit(1);
+    }
 
     s->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 #if GTK_CHECK_VERSION(3, 2, 0)
@@ -1941,7 +1945,9 @@ void gtk_display_init(DisplayState *ds, bool full_screen, bool grab_on_hover)
     bindtextdomain("qemu", CONFIG_QEMU_LOCALEDIR);
     textdomain("qemu");
 
-    s->null_cursor = gdk_cursor_new(GDK_BLANK_CURSOR);
+    window_display = gtk_widget_get_display(s->window);
+    s->null_cursor = gdk_cursor_new_for_display(window_display,
+                                                GDK_BLANK_CURSOR);
 
     s->mouse_mode_notifier.notify = gd_mouse_mode_change;
     qemu_add_mouse_mode_change_notifier(&s->mouse_mode_notifier);
@@ -2002,8 +2008,28 @@ void gtk_display_init(DisplayState *ds, bool full_screen, bool grab_on_hover)
     gd_set_keycode_type(s);
 }
 
-void early_gtk_display_init(void)
+void early_gtk_display_init(int opengl)
 {
+    gtkinit = gtk_init_check(NULL, NULL);
+    if (!gtkinit) {
+        /* don't exit yet, that'll break -help */
+        return;
+    }
+
+    switch (opengl) {
+    case -1: /* default */
+    case 0:  /* off */
+        break;
+    case 1: /* on */
+#if defined(CONFIG_OPENGL)
+        gtk_egl_init();
+#endif
+        break;
+    default:
+        g_assert_not_reached();
+        break;
+    }
+
 #if defined(CONFIG_VTE)
     register_vc_handler(gd_vc_handler);
 #endif

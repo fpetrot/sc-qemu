@@ -31,7 +31,6 @@
 #include "qapi-visit.h"
 #include "qapi/opts-visitor.h"
 #include "qapi/dealloc-visitor.h"
-#include "qapi/qmp/qerror.h"
 #include "hw/boards.h"
 #include "sysemu/hostmem.h"
 #include "qmp-commands.h"
@@ -125,7 +124,7 @@ static void numa_node_parse(NumaNodeOptions *node, QemuOpts *opts, Error **errp)
     max_numa_nodeid = MAX(max_numa_nodeid, nodenr + 1);
 }
 
-static int parse_numa(QemuOpts *opts, void *opaque)
+static int parse_numa(void *opaque, QemuOpts *opts, Error **errp)
 {
     NumaOptions *object = NULL;
     Error *err = NULL;
@@ -216,8 +215,7 @@ void parse_numa_opts(MachineClass *mc)
 {
     int i;
 
-    if (qemu_opts_foreach(qemu_find_opts("numa"), parse_numa,
-                          NULL, 1) != 0) {
+    if (qemu_opts_foreach(qemu_find_opts("numa"), parse_numa, NULL, NULL)) {
         exit(1);
     }
 
@@ -457,7 +455,7 @@ static int query_memdev(Object *obj, void *opaque)
 
         m->value->policy = object_property_get_enum(obj,
                                                     "policy",
-                                                    HostMemPolicy_lookup,
+                                                    "HostMemPolicy",
                                                     &err);
         if (err) {
             goto error;
@@ -486,7 +484,7 @@ MemdevList *qmp_query_memdev(Error **errp)
     Object *obj;
     MemdevList *list = NULL;
 
-    obj = object_resolve_path("/objects", NULL);
+    obj = object_get_objects_root();
     if (obj == NULL) {
         return NULL;
     }
