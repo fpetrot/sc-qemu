@@ -32,7 +32,7 @@
 #include "trace.h"
 
 #define FRAME_TIMER_FREQ 1000
-#define FRAME_TIMER_NS   (NSEC_PER_SEC / FRAME_TIMER_FREQ)
+#define FRAME_TIMER_NS   (NANOSECONDS_PER_SECOND / FRAME_TIMER_FREQ)
 #define UFRAME_TIMER_NS  (FRAME_TIMER_NS / 8)
 
 #define NB_MAXINTRATE    8        // Max rate at which controller issues ints
@@ -726,7 +726,7 @@ static void ehci_detach(USBPort *port)
     ehci_queues_rip_device(s, port->dev, 0);
     ehci_queues_rip_device(s, port->dev, 1);
 
-    *portsc &= ~(PORTSC_CONNECT|PORTSC_PED);
+    *portsc &= ~(PORTSC_CONNECT|PORTSC_PED|PORTSC_SUSPEND);
     *portsc |= PORTSC_CSC;
 
     ehci_raise_irq(s, USBSTS_PCD);

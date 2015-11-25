@@ -25,8 +25,6 @@
 #include "exec/cpu-defs.h"
 #include "fpu/softfloat.h"
 
-#define ELF_MACHINE     EM_TRICORE
-
 #define CPUArchState struct CPUTriCoreState
 
 struct CPUTriCoreState;
@@ -350,7 +348,7 @@ void tricore_cpu_list(FILE *f, fprintf_function cpu_fprintf);
 #define cpu_signal_handler cpu_tricore_signal_handler
 #define cpu_list tricore_cpu_list
 
-static inline int cpu_mmu_index(CPUTriCoreState *env)
+static inline int cpu_mmu_index(CPUTriCoreState *env, bool ifetch)
 {
     return 0;
 }
@@ -372,7 +370,7 @@ enum {
 };
 
 void cpu_state_reset(CPUTriCoreState *s);
-int cpu_tricore_exec(CPUTriCoreState *s);
+int cpu_tricore_exec(CPUState *cpu);
 void tricore_tcg_init(void);
 int cpu_tricore_signal_handler(int host_signum, void *pinfo, void *puc);
 

@@ -1296,12 +1296,12 @@ const struct mips_opcode mips_builtin_opcodes[] =
 {"dmod",    "d,s,t",    0x000000de, 0xfc0007ff, WR_d|RD_s|RD_t,       0, I64R6},
 {"ddivu",   "d,s,t",    0x0000009f, 0xfc0007ff, WR_d|RD_s|RD_t,       0, I64R6},
 {"dmodu",   "d,s,t",    0x000000df, 0xfc0007ff, WR_d|RD_s|RD_t,       0, I64R6},
-{"ll",      "t,o(b)",   0x7c000036, 0xfc00007f, LDD|RD_b|WR_t,        0, I32R6},
-{"sc",      "t,o(b)",   0x7c000026, 0xfc00007f, LDD|RD_b|WR_t,        0, I32R6},
-{"lld",     "t,o(b)",   0x7c000037, 0xfc00007f, LDD|RD_b|WR_t,        0, I64R6},
-{"scd",     "t,o(b)",   0x7c000027, 0xfc00007f, LDD|RD_b|WR_t,        0, I64R6},
-{"pref",    "h,o(b)",   0x7c000035, 0xfc00007f, RD_b,                 0, I32R6},
-{"cache",   "k,o(b)",   0x7c000025, 0xfc00007f, RD_b,                 0, I32R6},
+{"ll",      "t,+o(b)",  0x7c000036, 0xfc00007f, LDD|RD_b|WR_t,        0, I32R6},
+{"sc",      "t,+o(b)",  0x7c000026, 0xfc00007f, LDD|RD_b|WR_t,        0, I32R6},
+{"lld",     "t,+o(b)",  0x7c000037, 0xfc00007f, LDD|RD_b|WR_t,        0, I64R6},
+{"scd",     "t,+o(b)",  0x7c000027, 0xfc00007f, LDD|RD_b|WR_t,        0, I64R6},
+{"pref",    "h,+o(b)",  0x7c000035, 0xfc00007f, RD_b,                 0, I32R6},
+{"cache",   "k,+o(b)",  0x7c000025, 0xfc00007f, RD_b,                 0, I32R6},
 {"seleqz",  "d,v,t",    0x00000035, 0xfc0007ff, WR_d|RD_s|RD_t,       0, I32R6},
 {"selnez",  "d,v,t",    0x00000037, 0xfc0007ff, WR_d|RD_s|RD_t,       0, I32R6},
 {"maddf.s", "D,S,T",    0x46000018, 0xffe0003f, WR_D|RD_S|RD_T|FP_S,  0, I32R6},
@@ -2420,9 +2420,11 @@ const struct mips_opcode mips_builtin_opcodes[] =
 {"hibernate","",        0x42000023, 0xffffffff,	0, 			0,		V1	},
 {"ins",     "t,r,+A,+B", 0x7c000004, 0xfc00003f, WR_t|RD_s,    		0,		I33	},
 {"jr",      "s",	0x00000008, 0xfc1fffff,	UBD|RD_s,		0,		I1	},
+{"jr",      "s",	0x00000009, 0xfc1fffff,	UBD|RD_s,		0,		I32R6	}, /* jalr */
 /* jr.hb is officially MIPS{32,64}R2, but it works on R1 as jr with
    the same hazard barrier effect.  */
 {"jr.hb",   "s",	0x00000408, 0xfc1fffff,	UBD|RD_s,		0,		I32	},
+{"jr.hb",   "s",	0x00000409, 0xfc1fffff,	UBD|RD_s,		0,		I32R6	}, /* jalr.hb */
 {"j",       "s",	0x00000008, 0xfc1fffff,	UBD|RD_s,		0,		I1	}, /* jr */
 /* SVR4 PIC code requires special handling for j, so it must be a
    macro.  */

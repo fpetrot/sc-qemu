@@ -26,10 +26,16 @@
 #include "hw/sysbus.h"
 #include "trace.h"
 #include "hw/platform-bus.h"
+#include "sysemu/kvm.h"
 
 /*
  * Functions used whatever the injection method
  */
+
+static inline bool vfio_irq_is_automasked(VFIOINTp *intp)
+{
+    return intp->flags & VFIO_IRQ_INFO_AUTOMASKED;
+}
 
 /**
  * vfio_init_intp - allocate, initialize the IRQ struct pointer
@@ -51,15 +57,30 @@ static VFIOINTp *vfio_init_intp(VFIODevice *vbasedev,
     intp->pin = info.index;
     intp->flags = info.flags;
     intp->state = VFIO_IRQ_INACTIVE;
+    intp->kvm_accel = false;
 
     sysbus_init_irq(sbdev, &intp->qemuirq);
 
     /* Get an eventfd for trigger */
-    ret = event_notifier_init(&intp->interrupt, 0);
+    intp->interrupt = g_malloc0(sizeof(EventNotifier));
+    ret = event_notifier_init(intp->interrupt, 0);
     if (ret) {
+        g_free(intp->interrupt);
         g_free(intp);
         error_report("vfio: Error: trigger event_notifier_init failed ");
         return NULL;
+    }
+    if (vfio_irq_is_automasked(intp)) {
+        /* Get an eventfd for resample/unmask */
+        intp->unmask = g_malloc0(sizeof(EventNotifier));
+        ret = event_notifier_init(intp->unmask, 0);
+        if (ret) {
+            g_free(intp->interrupt);
+            g_free(intp->unmask);
+            g_free(intp);
+            error_report("vfio: Error: resamplefd event_notifier_init failed");
+            return NULL;
+        }
     }
 
     QLIST_INSERT_HEAD(&vdev->intp_list, intp, next);
@@ -91,7 +112,7 @@ static int vfio_set_trigger_eventfd(VFIOINTp *intp,
     irq_set->start = 0;
     irq_set->count = 1;
     pfd = (int32_t *)&irq_set->data;
-    *pfd = event_notifier_get_fd(&intp->interrupt);
+    *pfd = event_notifier_get_fd(intp->interrupt);
     qemu_set_fd_handler(*pfd, (IOHandler *)handler, NULL, intp);
     ret = ioctl(vbasedev->fd, VFIO_DEVICE_SET_IRQS, irq_set);
     g_free(irq_set);
@@ -173,7 +194,7 @@ static void vfio_intp_mmap_enable(void *opaque)
 static void vfio_intp_inject_pending_lockheld(VFIOINTp *intp)
 {
     trace_vfio_platform_intp_inject_pending_lockheld(intp->pin,
-                              event_notifier_get_fd(&intp->interrupt));
+                              event_notifier_get_fd(intp->interrupt));
 
     intp->state = VFIO_IRQ_ACTIVE;
 
@@ -215,18 +236,18 @@ static void vfio_intp_interrupt(VFIOINTp *intp)
         trace_vfio_intp_interrupt_set_pending(intp->pin);
         QSIMPLEQ_INSERT_TAIL(&vdev->pending_intp_queue,
                              intp, pqnext);
-        ret = event_notifier_test_and_clear(&intp->interrupt);
+        ret = event_notifier_test_and_clear(intp->interrupt);
         qemu_mutex_unlock(&vdev->intp_mutex);
         return;
     }
 
     trace_vfio_platform_intp_interrupt(intp->pin,
-                              event_notifier_get_fd(&intp->interrupt));
+                              event_notifier_get_fd(intp->interrupt));
 
-    ret = event_notifier_test_and_clear(&intp->interrupt);
+    ret = event_notifier_test_and_clear(intp->interrupt);
     if (!ret) {
-        error_report("Error when clearing fd=%d (ret = %d)\n",
-                     event_notifier_get_fd(&intp->interrupt), ret);
+        error_report("Error when clearing fd=%d (ret = %d)",
+                     event_notifier_get_fd(intp->interrupt), ret);
     }
 
     intp->state = VFIO_IRQ_ACTIVE;
@@ -274,13 +295,13 @@ static void vfio_platform_eoi(VFIODevice *vbasedev)
     QLIST_FOREACH(intp, &vdev->intp_list, next) {
         if (intp->state == VFIO_IRQ_ACTIVE) {
             trace_vfio_platform_eoi(intp->pin,
-                                event_notifier_get_fd(&intp->interrupt));
+                                event_notifier_get_fd(intp->interrupt));
             intp->state = VFIO_IRQ_INACTIVE;
 
             /* deassert the virtual IRQ */
             qemu_set_irq(intp->qemuirq, 0);
 
-            if (intp->flags & VFIO_IRQ_INFO_AUTOMASKED) {
+            if (vfio_irq_is_automasked(intp)) {
                 /* unmasks the physical level-sensitive IRQ */
                 vfio_unmask_single_irqindex(vbasedev, intp->pin);
             }
@@ -301,18 +322,123 @@ static void vfio_platform_eoi(VFIODevice *vbasedev)
 /**
  * vfio_start_eventfd_injection - starts the virtual IRQ injection using
  * user-side handled eventfds
- * @intp: the IRQ struct pointer
+ * @sbdev: the sysbus device handle
+ * @irq: the qemu irq handle
  */
 
-static int vfio_start_eventfd_injection(VFIOINTp *intp)
+static void vfio_start_eventfd_injection(SysBusDevice *sbdev, qemu_irq irq)
 {
     int ret;
+    VFIOPlatformDevice *vdev = VFIO_PLATFORM_DEVICE(sbdev);
+    VFIOINTp *intp;
+
+    QLIST_FOREACH(intp, &vdev->intp_list, next) {
+        if (intp->qemuirq == irq) {
+            break;
+        }
+    }
+    assert(intp);
 
     ret = vfio_set_trigger_eventfd(intp, vfio_intp_interrupt);
     if (ret) {
-        error_report("vfio: Error: Failed to pass IRQ fd to the driver: %m");
+        error_report("vfio: failed to start eventfd signaling for IRQ %d: %m",
+                     intp->pin);
+        abort();
+    }
+}
+
+/*
+ * Functions used for irqfd
+ */
+
+/**
+ * vfio_set_resample_eventfd - sets the resamplefd for an IRQ
+ * @intp: the IRQ struct handle
+ * programs the VFIO driver to unmask this IRQ when the
+ * intp->unmask eventfd is triggered
+ */
+static int vfio_set_resample_eventfd(VFIOINTp *intp)
+{
+    VFIODevice *vbasedev = &intp->vdev->vbasedev;
+    struct vfio_irq_set *irq_set;
+    int argsz, ret;
+    int32_t *pfd;
+
+    argsz = sizeof(*irq_set) + sizeof(*pfd);
+    irq_set = g_malloc0(argsz);
+    irq_set->argsz = argsz;
+    irq_set->flags = VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_UNMASK;
+    irq_set->index = intp->pin;
+    irq_set->start = 0;
+    irq_set->count = 1;
+    pfd = (int32_t *)&irq_set->data;
+    *pfd = event_notifier_get_fd(intp->unmask);
+    qemu_set_fd_handler(*pfd, NULL, NULL, NULL);
+    ret = ioctl(vbasedev->fd, VFIO_DEVICE_SET_IRQS, irq_set);
+    g_free(irq_set);
+    if (ret < 0) {
+        error_report("vfio: Failed to set resample eventfd: %m");
     }
     return ret;
+}
+
+/**
+ * vfio_start_irqfd_injection - starts the virtual IRQ injection using
+ * irqfd
+ *
+ * @sbdev: the sysbus device handle
+ * @irq: the qemu irq handle
+ *
+ * In case the irqfd setup fails, we fallback to userspace handled eventfd
+ */
+static void vfio_start_irqfd_injection(SysBusDevice *sbdev, qemu_irq irq)
+{
+    VFIOPlatformDevice *vdev = VFIO_PLATFORM_DEVICE(sbdev);
+    VFIOINTp *intp;
+
+    if (!kvm_irqfds_enabled() || !kvm_resamplefds_enabled() ||
+        !vdev->irqfd_allowed) {
+        goto fail_irqfd;
+    }
+
+    QLIST_FOREACH(intp, &vdev->intp_list, next) {
+        if (intp->qemuirq == irq) {
+            break;
+        }
+    }
+    assert(intp);
+
+    if (kvm_irqchip_add_irqfd_notifier(kvm_state, intp->interrupt,
+                                   intp->unmask, irq) < 0) {
+        goto fail_irqfd;
+    }
+
+    if (vfio_set_trigger_eventfd(intp, NULL) < 0) {
+        goto fail_vfio;
+    }
+    if (vfio_irq_is_automasked(intp)) {
+        if (vfio_set_resample_eventfd(intp) < 0) {
+            goto fail_vfio;
+        }
+        trace_vfio_platform_start_level_irqfd_injection(intp->pin,
+                                    event_notifier_get_fd(intp->interrupt),
+                                    event_notifier_get_fd(intp->unmask));
+    } else {
+        trace_vfio_platform_start_edge_irqfd_injection(intp->pin,
+                                    event_notifier_get_fd(intp->interrupt));
+    }
+
+    intp->kvm_accel = true;
+
+    return;
+fail_vfio:
+    kvm_irqchip_remove_irqfd_notifier(kvm_state, intp->interrupt, irq);
+    error_report("vfio: failed to start eventfd signaling for IRQ %d: %m",
+                 intp->pin);
+    abort();
+fail_irqfd:
+    vfio_start_eventfd_injection(sbdev, irq);
+    return;
 }
 
 /* VFIO skeleton */
@@ -352,7 +478,7 @@ static int vfio_populate_device(VFIODevice *vbasedev)
         struct vfio_region_info reg_info = { .argsz = sizeof(reg_info) };
         VFIORegion *ptr;
 
-        vdev->regions[i] = g_malloc0(sizeof(VFIORegion));
+        vdev->regions[i] = g_new0(VFIORegion, 1);
         ptr = vdev->regions[i];
         reg_info.index = i;
         ret = ioctl(vbasedev->fd, VFIO_DEVICE_GET_REGION_INFO, &reg_info);
@@ -549,7 +675,6 @@ static void vfio_platform_realize(DeviceState *dev, Error **errp)
     VFIOPlatformDevice *vdev = VFIO_PLATFORM_DEVICE(dev);
     SysBusDevice *sbdev = SYS_BUS_DEVICE(dev);
     VFIODevice *vbasedev = &vdev->vbasedev;
-    VFIOINTp *intp;
     int i, ret;
 
     vbasedev->type = VFIO_DEVICE_TYPE_PLATFORM;
@@ -568,10 +693,6 @@ static void vfio_platform_realize(DeviceState *dev, Error **errp)
         vfio_map_region(vdev, i);
         sysbus_init_mmio(sbdev, &vdev->regions[i]->mem);
     }
-
-    QLIST_FOREACH(intp, &vdev->intp_list, next) {
-        vfio_start_eventfd_injection(intp);
-    }
 }
 
 static const VMStateDescription vfio_platform_vmstate = {
@@ -581,20 +702,23 @@ static const VMStateDescription vfio_platform_vmstate = {
 
 static Property vfio_platform_dev_properties[] = {
     DEFINE_PROP_STRING("host", VFIOPlatformDevice, vbasedev.name),
-    DEFINE_PROP_BOOL("x-mmap", VFIOPlatformDevice, vbasedev.allow_mmap, true),
+    DEFINE_PROP_BOOL("x-no-mmap", VFIOPlatformDevice, vbasedev.no_mmap, false),
     DEFINE_PROP_UINT32("mmap-timeout-ms", VFIOPlatformDevice,
                        mmap_timeout, 1100),
+    DEFINE_PROP_BOOL("x-irqfd", VFIOPlatformDevice, irqfd_allowed, true),
     DEFINE_PROP_END_OF_LIST(),
 };
 
 static void vfio_platform_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *sbc = SYS_BUS_DEVICE_CLASS(klass);
 
     dc->realize = vfio_platform_realize;
     dc->props = vfio_platform_dev_properties;
     dc->vmsd = &vfio_platform_vmstate;
     dc->desc = "VFIO-based platform device assignment";
+    sbc->connect_irq_notifier = vfio_start_irqfd_injection;
     set_bit(DEVICE_CATEGORY_MISC, dc->categories);
 }
 

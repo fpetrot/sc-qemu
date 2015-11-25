@@ -594,8 +594,7 @@ static int load_uboot_image(const char *filename, hwaddr *ep, hwaddr *loadaddr,
     ret = hdr->ih_size;
 
 out:
-    if (data)
-        g_free(data);
+    g_free(data);
     close(fd);
     return ret;
 }
@@ -741,7 +740,7 @@ static void *rom_set_mr(Rom *rom, Object *owner, const char *name)
     memory_region_init_resizeable_ram(rom->mr, owner, name,
                                       rom->datasize, rom->romsize,
                                       fw_cfg_resized,
-                                      &error_abort);
+                                      &error_fatal);
     memory_region_set_readonly(rom->mr, true);
     vmstate_register_ram_global(rom->mr);
 
@@ -933,7 +932,7 @@ static void rom_reset(void *unused)
     }
 }
 
-int rom_load_all(void)
+int rom_check_and_register_reset(void)
 {
     hwaddr addr = 0;
     MemoryRegionSection section;
@@ -957,12 +956,8 @@ int rom_load_all(void)
         memory_region_unref(section.mr);
     }
     qemu_register_reset(rom_reset, NULL);
-    return 0;
-}
-
-void rom_load_done(void)
-{
     roms_loaded = 1;
+    return 0;
 }
 
 void rom_set_fw(FWCfgState *f)

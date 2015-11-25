@@ -39,8 +39,9 @@ typedef struct SaveVMHandlers {
     void (*set_params)(const MigrationParams *params, void * opaque);
     SaveStateHandler *save_state;
 
-    void (*cancel)(void *opaque);
-    int (*save_live_complete)(QEMUFile *f, void *opaque);
+    void (*cleanup)(void *opaque);
+    int (*save_live_complete_postcopy)(QEMUFile *f, void *opaque);
+    int (*save_live_complete_precopy)(QEMUFile *f, void *opaque);
 
     /* This runs both outside and inside the iothread lock.  */
     bool (*is_active)(void *opaque);
@@ -54,8 +55,9 @@ typedef struct SaveVMHandlers {
 
     /* This runs outside the iothread lock!  */
     int (*save_live_setup)(QEMUFile *f, void *opaque);
-    uint64_t (*save_live_pending)(QEMUFile *f, void *opaque, uint64_t max_size);
-
+    void (*save_live_pending)(QEMUFile *f, void *opaque, uint64_t max_size,
+                              uint64_t *non_postcopiable_pending,
+                              uint64_t *postcopiable_pending);
     LoadStateHandler *load_state;
 } SaveVMHandlers;
 
@@ -75,9 +77,6 @@ int register_savevm_live(DeviceState *dev,
                          void *opaque);
 
 void unregister_savevm(DeviceState *dev, const char *idstr, void *opaque);
-void register_device_unmigratable(DeviceState *dev, const char *idstr,
-                                                                void *opaque);
-
 
 typedef struct VMStateInfo VMStateInfo;
 typedef struct VMStateDescription VMStateDescription;
@@ -757,9 +756,6 @@ extern const VMStateInfo vmstate_info_bitmap;
 #define VMSTATE_UINT32_SUB_ARRAY(_f, _s, _start, _num)                \
     VMSTATE_SUB_ARRAY(_f, _s, _start, _num, 0, vmstate_info_uint32, uint32_t)
 
-#define VMSTATE_UINT32_ARRAY(_f, _s, _n)                              \
-    VMSTATE_UINT32_ARRAY_V(_f, _s, _n, 0)
-
 #define VMSTATE_INT64_ARRAY_V(_f, _s, _n, _v)                         \
     VMSTATE_ARRAY(_f, _s, _n, _v, vmstate_info_int64, int64_t)
 
@@ -819,6 +815,8 @@ int vmstate_load_state(QEMUFile *f, const VMStateDescription *vmsd,
                        void *opaque, int version_id);
 void vmstate_save_state(QEMUFile *f, const VMStateDescription *vmsd,
                         void *opaque, QJSON *vmdesc);
+
+bool vmstate_save_needed(const VMStateDescription *vmsd, void *opaque);
 
 int vmstate_register_with_alias_id(DeviceState *dev, int instance_id,
                                    const VMStateDescription *vmsd,

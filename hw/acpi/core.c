@@ -528,6 +528,7 @@ void acpi_pm_tmr_init(ACPIREGS *ar, acpi_update_sci_fn update_sci,
     ar->tmr.timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, acpi_pm_tmr_timer, ar);
     memory_region_init_io(&ar->tmr.io, memory_region_owner(parent),
                           &acpi_pm_tmr_ops, ar, "acpi-tmr", 4);
+    memory_region_clear_global_locking(&ar->tmr.io);
     memory_region_add_subregion(parent, 8, &ar->tmr.io);
 }
 
@@ -624,8 +625,12 @@ void acpi_pm1_cnt_reset(ACPIREGS *ar)
 void acpi_gpe_init(ACPIREGS *ar, uint8_t len)
 {
     ar->gpe.len = len;
-    ar->gpe.sts = g_malloc0(len / 2);
-    ar->gpe.en = g_malloc0(len / 2);
+    /* Only first len / 2 bytes are ever used,
+     * but the caller in ich9.c migrates full len bytes.
+     * TODO: fix ich9.c and drop the extra allocation.
+     */
+    ar->gpe.sts = g_malloc0(len);
+    ar->gpe.en = g_malloc0(len);
 }
 
 void acpi_gpe_reset(ACPIREGS *ar)

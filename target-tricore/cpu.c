@@ -92,7 +92,7 @@ static void tricore_cpu_initfn(Object *obj)
     CPUTriCoreState *env = &cpu->env;
 
     cs->env_ptr = env;
-    cpu_exec_init(env);
+    cpu_exec_init(cs, &error_abort);
 
     if (tcg_enabled()) {
         tricore_tcg_init();
@@ -170,6 +170,12 @@ static void tricore_cpu_class_init(ObjectClass *c, void *data)
     cc->set_pc = tricore_cpu_set_pc;
     cc->synchronize_from_tb = tricore_cpu_synchronize_from_tb;
 
+    /*
+     * Reason: tricore_cpu_initfn() calls cpu_exec_init(), which saves
+     * the object in cpus -> dangling pointer after final
+     * object_unref().
+     */
+    dc->cannot_destroy_with_object_finalize_yet = true;
 }
 
 static void cpu_register(const TriCoreCPUInfo *info)

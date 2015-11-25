@@ -21,7 +21,8 @@
 #include "virtio-9p-coth.h"
 #include "hw/virtio/virtio-access.h"
 
-static uint64_t virtio_9p_get_features(VirtIODevice *vdev, uint64_t features)
+static uint64_t virtio_9p_get_features(VirtIODevice *vdev, uint64_t features,
+                                       Error **errp)
 {
     virtio_add_feature(&features, VIRTIO_9P_MOUNT_TAG);
     return features;
@@ -40,6 +41,16 @@ static void virtio_9p_get_config(VirtIODevice *vdev, uint8_t *config)
     memcpy(cfg->tag, s->tag, len);
     memcpy(config, cfg, s->config_size);
     g_free(cfg);
+}
+
+static void virtio_9p_save(QEMUFile *f, void *opaque)
+{
+    virtio_save(VIRTIO_DEVICE(opaque), f);
+}
+
+static int virtio_9p_load(QEMUFile *f, void *opaque, int version_id)
+{
+    return virtio_load(VIRTIO_DEVICE(opaque), f, version_id);
 }
 
 static void virtio_9p_device_realize(DeviceState *dev, Error **errp)
@@ -129,6 +140,7 @@ static void virtio_9p_device_realize(DeviceState *dev, Error **errp)
     }
     v9fs_path_free(&path);
 
+    register_savevm(dev, "virtio-9p", -1, 1, virtio_9p_save, virtio_9p_load, s);
     return;
 out:
     g_free(s->ctx.fs_root);

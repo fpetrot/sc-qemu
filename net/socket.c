@@ -213,7 +213,7 @@ static void net_socket_send(void *opaque)
             if (s->index >= s->packet_len) {
                 s->index = 0;
                 s->state = 0;
-                if (qemu_send_packet_async(&s->nc, s->buf, size,
+                if (qemu_send_packet_async(&s->nc, s->buf, s->packet_len,
                                            net_socket_send_completed) == 0) {
                     net_socket_read_poll(s, false);
                     break;
@@ -706,8 +706,8 @@ int net_init_socket(const NetClientOptions *opts, const char *name,
     Error *err = NULL;
     const NetdevSocketOptions *sock;
 
-    assert(opts->kind == NET_CLIENT_OPTIONS_KIND_SOCKET);
-    sock = opts->socket;
+    assert(opts->type == NET_CLIENT_OPTIONS_KIND_SOCKET);
+    sock = opts->u.socket;
 
     if (sock->has_fd + sock->has_listen + sock->has_connect + sock->has_mcast +
         sock->has_udp != 1) {

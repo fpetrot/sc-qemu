@@ -396,9 +396,6 @@ static MemTxResult  memory_region_read_accessor(MemoryRegion *mr,
 {
     uint64_t tmp;
 
-    if (mr->flush_coalesced_mmio) {
-        qemu_flush_coalesced_mmio_buffer();
-    }
     tmp = mr->ops->read(mr->opaque, addr, size);
     trace_memory_region_ops_read(mr, addr, tmp, size);
     *value |= (tmp & mask) << shift;
@@ -416,9 +413,6 @@ static MemTxResult memory_region_read_with_attrs_accessor(MemoryRegion *mr,
     uint64_t tmp = 0;
     MemTxResult r;
 
-    if (mr->flush_coalesced_mmio) {
-        qemu_flush_coalesced_mmio_buffer();
-    }
     r = mr->ops->read_with_attrs(mr->opaque, addr, &tmp, size, attrs);
     trace_memory_region_ops_read(mr, addr, tmp, size);
     *value |= (tmp & mask) << shift;
@@ -451,9 +445,6 @@ static MemTxResult memory_region_write_accessor(MemoryRegion *mr,
 {
     uint64_t tmp;
 
-    if (mr->flush_coalesced_mmio) {
-        qemu_flush_coalesced_mmio_buffer();
-    }
     tmp = (*value >> shift) & mask;
     trace_memory_region_ops_write(mr, addr, tmp, size);
     mr->ops->write(mr->opaque, addr, tmp, size);
@@ -470,9 +461,6 @@ static MemTxResult memory_region_write_with_attrs_accessor(MemoryRegion *mr,
 {
     uint64_t tmp;
 
-    if (mr->flush_coalesced_mmio) {
-        qemu_flush_coalesced_mmio_buffer();
-    }
     tmp = (*value >> shift) & mask;
     trace_memory_region_ops_write(mr, addr, tmp, size);
     return mr->ops->write_with_attrs(mr->opaque, addr, tmp, size, attrs);
@@ -871,11 +859,6 @@ static void memory_region_destructor_ram(MemoryRegion *mr)
     qemu_ram_free(mr->ram_addr);
 }
 
-static void memory_region_destructor_alias(MemoryRegion *mr)
-{
-    memory_region_unref(mr->alias);
-}
-
 static void memory_region_destructor_ram_from_ptr(MemoryRegion *mr)
 {
     qemu_ram_free_from_ptr(mr->ram_addr);
@@ -1012,6 +995,7 @@ static void memory_region_initfn(Object *obj)
     mr->ram_addr = RAM_ADDR_INVALID;
     mr->enabled = true;
     mr->romd_mode = true;
+    mr->global_locking = true;
     mr->destructor = memory_region_destructor_none;
     QTAILQ_INIT(&mr->subregions);
     QTAILQ_INIT(&mr->coalesced);
@@ -1198,7 +1182,7 @@ void memory_region_init_io(MemoryRegion *mr,
                            uint64_t size)
 {
     memory_region_init(mr, owner, name, size);
-    mr->ops = ops;
+    mr->ops = ops ? ops : &unassigned_mem_ops;
     mr->opaque = opaque;
     mr->terminates = true;
 }
@@ -1267,7 +1251,7 @@ void memory_region_init_ram_ptr(MemoryRegion *mr,
 
     /* qemu_ram_alloc_from_ptr cannot fail with ptr != NULL.  */
     assert(ptr != NULL);
-    mr->ram_addr = qemu_ram_alloc_from_ptr(size, ptr, mr, &error_abort);
+    mr->ram_addr = qemu_ram_alloc_from_ptr(size, ptr, mr, &error_fatal);
 }
 
 void memory_region_set_skip_dump(MemoryRegion *mr)
@@ -1283,8 +1267,6 @@ void memory_region_init_alias(MemoryRegion *mr,
                               uint64_t size)
 {
     memory_region_init(mr, owner, name, size);
-    memory_region_ref(orig);
-    mr->destructor = memory_region_destructor_alias;
     mr->alias = orig;
     mr->alias_offset = offset;
 }
@@ -1318,19 +1300,26 @@ void memory_region_init_iommu(MemoryRegion *mr,
     notifier_list_init(&mr->iommu_notify);
 }
 
-void memory_region_init_reservation(MemoryRegion *mr,
-                                    Object *owner,
-                                    const char *name,
-                                    uint64_t size)
-{
-    memory_region_init_io(mr, owner, &unassigned_mem_ops, mr, name, size);
-}
-
 static void memory_region_finalize(Object *obj)
 {
     MemoryRegion *mr = MEMORY_REGION(obj);
 
-    assert(QTAILQ_EMPTY(&mr->subregions));
+    assert(!mr->container);
+
+    /* We know the region is not visible in any address space (it
+     * does not have a container and cannot be a root either because
+     * it has no references, so we can blindly clear mr->enabled.
+     * memory_region_set_enabled instead could trigger a transaction
+     * and cause an infinite loop.
+     */
+    mr->enabled = false;
+    memory_region_transaction_begin();
+    while (!QTAILQ_EMPTY(&mr->subregions)) {
+        MemoryRegion *subregion = QTAILQ_FIRST(&mr->subregions);
+        memory_region_del_subregion(mr, subregion);
+    }
+    memory_region_transaction_commit();
+
     mr->destructor(mr);
     memory_region_clear_coalescing(mr);
     g_free((char *)mr->name);
@@ -1429,6 +1418,26 @@ void memory_region_register_iommu_notifier(MemoryRegion *mr, Notifier *n)
     notifier_list_add(&mr->iommu_notify, n);
 }
 
+void memory_region_iommu_replay(MemoryRegion *mr, Notifier *n,
+                                hwaddr granularity, bool is_write)
+{
+    hwaddr addr;
+    IOMMUTLBEntry iotlb;
+
+    for (addr = 0; addr < memory_region_size(mr); addr += granularity) {
+        iotlb = mr->iommu_ops->translate(mr, addr, is_write);
+        if (iotlb.perm != IOMMU_NONE) {
+            n->notify(n, &iotlb);
+        }
+
+        /* if (2^64 - MR size) < granularity, it's possible to get an
+         * infinite loop here.  This should catch such a wraparound */
+        if ((addr + granularity) < addr) {
+            break;
+        }
+    }
+}
+
 void memory_region_unregister_iommu_notifier(Notifier *n)
 {
     notifier_remove(n);
@@ -1444,8 +1453,15 @@ void memory_region_notify_iommu(MemoryRegion *mr,
 void memory_region_set_log(MemoryRegion *mr, bool log, unsigned client)
 {
     uint8_t mask = 1 << client;
+    uint8_t old_logging;
 
     assert(client == DIRTY_MEMORY_VGA);
+    old_logging = mr->vga_logging_count;
+    mr->vga_logging_count += log ? 1 : -1;
+    if (!!old_logging == !!mr->vga_logging_count) {
+        return;
+    }
+
     memory_region_transaction_begin();
     mr->dirty_log_mask = (mr->dirty_log_mask & ~mask) | (log * mask);
     memory_region_update_pending |= mr->enabled;
@@ -1646,6 +1662,16 @@ void memory_region_clear_flush_coalesced(MemoryRegion *mr)
     }
 }
 
+void memory_region_set_global_locking(MemoryRegion *mr)
+{
+    mr->global_locking = true;
+}
+
+void memory_region_clear_global_locking(MemoryRegion *mr)
+{
+    mr->global_locking = false;
+}
+
 void memory_region_add_eventfd(MemoryRegion *mr,
                                hwaddr addr,
                                unsigned size,
@@ -1662,7 +1688,9 @@ void memory_region_add_eventfd(MemoryRegion *mr,
     };
     unsigned i;
 
-    adjust_endianness(mr, &mrfd.data, size);
+    if (size) {
+        adjust_endianness(mr, &mrfd.data, size);
+    }
     memory_region_transaction_begin();
     for (i = 0; i < mr->ioeventfd_nb; ++i) {
         if (memory_region_ioeventfd_before(mrfd, mr->ioeventfds[i])) {
@@ -1695,7 +1723,9 @@ void memory_region_del_eventfd(MemoryRegion *mr,
     };
     unsigned i;
 
-    adjust_endianness(mr, &mrfd.data, size);
+    if (size) {
+        adjust_endianness(mr, &mrfd.data, size);
+    }
     memory_region_transaction_begin();
     for (i = 0; i < mr->ioeventfd_nb; ++i) {
         if (memory_region_ioeventfd_equal(mrfd, mr->ioeventfds[i])) {
@@ -1888,23 +1918,16 @@ static FlatRange *flatview_lookup(FlatView *view, AddrRange addr)
                    sizeof(FlatRange), cmp_flatrange_addr);
 }
 
-bool memory_region_present(MemoryRegion *container, hwaddr addr)
-{
-    MemoryRegion *mr = memory_region_find(container, addr, 1).mr;
-    if (!mr || (mr == container)) {
-        return false;
-    }
-    memory_region_unref(mr);
-    return true;
-}
-
 bool memory_region_is_mapped(MemoryRegion *mr)
 {
     return mr->container ? true : false;
 }
 
-MemoryRegionSection memory_region_find(MemoryRegion *mr,
-                                       hwaddr addr, uint64_t size)
+/* Same as memory_region_find, but it does not add a reference to the
+ * returned region.  It must be called from an RCU critical section.
+ */
+static MemoryRegionSection memory_region_find_rcu(MemoryRegion *mr,
+                                                  hwaddr addr, uint64_t size)
 {
     MemoryRegionSection ret = { .mr = NULL };
     MemoryRegion *root;
@@ -1925,11 +1948,10 @@ MemoryRegionSection memory_region_find(MemoryRegion *mr,
     }
     range = addrrange_make(int128_make64(addr), int128_make64(size));
 
-    rcu_read_lock();
     view = atomic_rcu_read(&as->current_map);
     fr = flatview_lookup(view, range);
     if (!fr) {
-        goto out;
+        return ret;
     }
 
     while (fr > view->ranges && addrrange_intersects(fr[-1].addr, range)) {
@@ -1945,10 +1967,30 @@ MemoryRegionSection memory_region_find(MemoryRegion *mr,
     ret.size = range.size;
     ret.offset_within_address_space = int128_get64(range.start);
     ret.readonly = fr->readonly;
-    memory_region_ref(ret.mr);
-out:
+    return ret;
+}
+
+MemoryRegionSection memory_region_find(MemoryRegion *mr,
+                                       hwaddr addr, uint64_t size)
+{
+    MemoryRegionSection ret;
+    rcu_read_lock();
+    ret = memory_region_find_rcu(mr, addr, size);
+    if (ret.mr) {
+        memory_region_ref(ret.mr);
+    }
     rcu_read_unlock();
     return ret;
+}
+
+bool memory_region_present(MemoryRegion *container, hwaddr addr)
+{
+    MemoryRegion *mr;
+
+    rcu_read_lock();
+    mr = memory_region_find_rcu(container, addr, 1).mr;
+    rcu_read_unlock();
+    return mr && mr != container;
 }
 
 void address_space_sync_dirty_bitmap(AddressSpace *as)
@@ -1998,6 +2040,9 @@ static void listener_add_address_space(MemoryListener *listener,
         return;
     }
 
+    if (listener->begin) {
+        listener->begin(listener);
+    }
     if (global_dirty_log) {
         if (listener->log_global_start) {
             listener->log_global_start(listener);
@@ -2014,9 +2059,15 @@ static void listener_add_address_space(MemoryListener *listener,
             .offset_within_address_space = int128_get64(fr->addr.start),
             .readonly = fr->readonly,
         };
+        if (fr->dirty_log_mask && listener->log_start) {
+            listener->log_start(listener, &section, 0, fr->dirty_log_mask);
+        }
         if (listener->region_add) {
             listener->region_add(listener, &section);
         }
+    }
+    if (listener->commit) {
+        listener->commit(listener);
     }
     flatview_unref(view);
 }

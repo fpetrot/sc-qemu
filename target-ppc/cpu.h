@@ -81,9 +81,9 @@
 #include "fpu/softfloat.h"
 
 #if defined (TARGET_PPC64)
-#define ELF_MACHINE     EM_PPC64
+#define PPC_ELF_MACHINE     EM_PPC64
 #else
-#define ELF_MACHINE     EM_PPC
+#define PPC_ELF_MACHINE     EM_PPC
 #endif
 
 /*****************************************************************************/
@@ -117,14 +117,20 @@ enum powerpc_mmu_t {
 #define POWERPC_MMU_AMR      0x00040000
     /* 64 bits PowerPC MMU                                     */
     POWERPC_MMU_64B        = POWERPC_MMU_64 | 0x00000001,
+    /* Architecture 2.03 and later (has LPCR) */
+    POWERPC_MMU_2_03       = POWERPC_MMU_64 | 0x00000002,
     /* Architecture 2.06 variant                               */
     POWERPC_MMU_2_06       = POWERPC_MMU_64 | POWERPC_MMU_1TSEG
                              | POWERPC_MMU_AMR | 0x00000003,
     /* Architecture 2.06 "degraded" (no 1T segments)           */
     POWERPC_MMU_2_06a      = POWERPC_MMU_64 | POWERPC_MMU_AMR
                              | 0x00000003,
-    /* Architecture 2.06 "degraded" (no 1T segments or AMR)    */
-    POWERPC_MMU_2_06d      = POWERPC_MMU_64 | 0x00000003,
+    /* Architecture 2.07 variant                               */
+    POWERPC_MMU_2_07       = POWERPC_MMU_64 | POWERPC_MMU_1TSEG
+                             | POWERPC_MMU_AMR | 0x00000004,
+    /* Architecture 2.07 "degraded" (no 1T segments)           */
+    POWERPC_MMU_2_07a      = POWERPC_MMU_64 | POWERPC_MMU_AMR
+                             | 0x00000004,
 #endif /* defined(TARGET_PPC64) */
 };
 
@@ -1073,6 +1079,7 @@ struct CPUPPCState {
     uint64_t insns_flags2;
 #if defined(TARGET_PPC64)
     struct ppc_segment_page_sizes sps;
+    bool ci_large_pages;
 #endif
 
 #if defined(TARGET_PPC64) && !defined(CONFIG_USER_ONLY)
@@ -1164,7 +1171,7 @@ do {                                            \
 PowerPCCPU *cpu_ppc_init(const char *cpu_model);
 void ppc_translate_init(void);
 void gen_update_current_nip(void *opaque);
-int cpu_ppc_exec (CPUPPCState *s);
+int cpu_ppc_exec (CPUState *s);
 /* you can call this signal handler from your SIGBUS and SIGSEGV
    signal handlers to inform the virtual CPU of exceptions. non zero
    is returned if the signal was handled by the virtual CPU.  */
@@ -1241,7 +1248,6 @@ int ppc_dcr_write (ppc_dcr_t *dcr_env, int dcrn, uint32_t val);
 #define cpu_init(cpu_model) CPU(cpu_ppc_init(cpu_model))
 
 #define cpu_exec cpu_ppc_exec
-#define cpu_gen_code cpu_ppc_gen_code
 #define cpu_signal_handler cpu_ppc_signal_handler
 #define cpu_list ppc_cpu_list
 
@@ -1250,7 +1256,7 @@ int ppc_dcr_write (ppc_dcr_t *dcr_env, int dcrn, uint32_t val);
 #define MMU_MODE1_SUFFIX _kernel
 #define MMU_MODE2_SUFFIX _hypv
 #define MMU_USER_IDX 0
-static inline int cpu_mmu_index (CPUPPCState *env)
+static inline int cpu_mmu_index (CPUPPCState *env, bool ifetch)
 {
     return env->mmu_idx;
 }

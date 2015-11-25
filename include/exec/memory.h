@@ -23,7 +23,6 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "qemu-common.h"
 #include "exec/cpu-common.h"
 #ifndef CONFIG_USER_ONLY
 #include "exec/hwaddr.h"
@@ -180,6 +179,8 @@ struct MemoryRegion {
     bool rom_device;
     bool warning_printed; /* For reservations */
     bool flush_coalesced_mmio;
+    bool global_locking;
+    uint8_t vga_logging_count;
     MemoryRegion *alias;
     hwaddr alias_offset;
     int32_t priority;
@@ -323,7 +324,7 @@ void memory_region_unref(MemoryRegion *mr);
  * @owner: the object that tracks the region's reference count
  * @ops: a structure containing read and write callbacks to be used when
  *       I/O is performed on the region.
- * @opaque: passed to to the read and write callbacks of the @ops structure.
+ * @opaque: passed to the read and write callbacks of the @ops structure.
  * @name: used for debugging; not visible to the user or ABI
  * @size: size of the region.
  */
@@ -436,6 +437,9 @@ void memory_region_init_alias(MemoryRegion *mr,
  * memory_region_init_rom_device:  Initialize a ROM memory region.  Writes are
  *                                 handled via callbacks.
  *
+ * If NULL callbacks pointer is given, then I/O space is not supposed to be
+ * handled by QEMU itself. Any access via the memory API will cause an abort().
+ *
  * @mr: the #MemoryRegion to be initialized.
  * @owner: the object that tracks the region's reference count
  * @ops: callbacks for write access handling.
@@ -458,16 +462,21 @@ void memory_region_init_rom_device(MemoryRegion *mr,
  * A reservation region primariy serves debugging purposes.  It claims I/O
  * space that is not supposed to be handled by QEMU itself.  Any access via
  * the memory API will cause an abort().
+ * This function is deprecated. Use memory_region_init_io() with NULL
+ * callbacks instead.
  *
  * @mr: the #MemoryRegion to be initialized
  * @owner: the object that tracks the region's reference count
  * @name: used for debugging; not visible to the user or ABI
  * @size: size of the region.
  */
-void memory_region_init_reservation(MemoryRegion *mr,
-                                    struct Object *owner,
+static inline void memory_region_init_reservation(MemoryRegion *mr,
+                                    Object *owner,
                                     const char *name,
-                                    uint64_t size);
+                                    uint64_t size)
+{
+    memory_region_init_io(mr, owner, NULL, mr, name, size);
+}
 
 /**
  * memory_region_init_iommu: Initialize a memory region that translates
@@ -572,6 +581,19 @@ void memory_region_notify_iommu(MemoryRegion *mr,
  *     valid on exit from the notifier.
  */
 void memory_region_register_iommu_notifier(MemoryRegion *mr, Notifier *n);
+
+/**
+ * memory_region_iommu_replay: replay existing IOMMU translations to
+ * a notifier
+ *
+ * @mr: the memory region to observe
+ * @n: the notifier to which to replay iommu mappings
+ * @granularity: Minimum page granularity to replay notifications for
+ * @is_write: Whether to treat the replay as a translate "write"
+ *     through the iommu
+ */
+void memory_region_iommu_replay(MemoryRegion *mr, Notifier *n,
+                                hwaddr granularity, bool is_write);
 
 /**
  * memory_region_unregister_iommu_notifier: unregister a notifier for
@@ -823,6 +845,31 @@ void memory_region_set_flush_coalesced(MemoryRegion *mr);
  * @mr: the memory region to be updated.
  */
 void memory_region_clear_flush_coalesced(MemoryRegion *mr);
+
+/**
+ * memory_region_set_global_locking: Declares the access processing requires
+ *                                   QEMU's global lock.
+ *
+ * When this is invoked, accesses to the memory region will be processed while
+ * holding the global lock of QEMU. This is the default behavior of memory
+ * regions.
+ *
+ * @mr: the memory region to be updated.
+ */
+void memory_region_set_global_locking(MemoryRegion *mr);
+
+/**
+ * memory_region_clear_global_locking: Declares that access processing does
+ *                                     not depend on the QEMU global lock.
+ *
+ * By clearing this property, accesses to the memory region will be processed
+ * outside of QEMU's global lock (unless the lock is held on when issuing the
+ * access request). In this case, the device model implementing the access
+ * handlers is responsible for synchronization of concurrency.
+ *
+ * @mr: the memory region to be updated.
+ */
+void memory_region_clear_global_locking(MemoryRegion *mr);
 
 /**
  * memory_region_add_eventfd: Request an eventfd to be triggered when a word
@@ -1112,7 +1159,7 @@ MemTxResult memory_region_dispatch_write(MemoryRegion *mr,
  * address_space_init: initializes an address space
  *
  * @as: an uninitialized #AddressSpace
- * @root: a #MemoryRegion that routes addesses for the address space
+ * @root: a #MemoryRegion that routes addresses for the address space
  * @name: an address space name.  The name is only used for debugging
  *        output.
  */

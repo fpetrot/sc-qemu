@@ -14,9 +14,10 @@
 #include "exec/memory.h"
 #include "hw/irq.h"
 #include "qemu/notify.h"
+#include "cpu.h"
 
 /* armv7m.c */
-qemu_irq *armv7m_init(MemoryRegion *system_memory, int mem_size, int num_irq,
+DeviceState *armv7m_init(MemoryRegion *system_memory, int mem_size, int num_irq,
                       const char *kernel_filename, const char *cpu_model);
 
 /*
@@ -86,6 +87,22 @@ struct arm_boot_info {
      * -pflash. It also implies that fw_cfg_find() will succeed.
      */
     bool firmware_loaded;
+
+    /* Address at which board specific loader/setup code exists. If enabled,
+     * this code-blob will run before anything else. It must return to the
+     * caller via the link register. There is no stack set up. Enabled by
+     * defining write_board_setup, which is responsible for loading the blob
+     * to the specified address.
+     */
+    hwaddr board_setup_addr;
+    void (*write_board_setup)(ARMCPU *cpu,
+                              const struct arm_boot_info *info);
+
+    /* If set, the board specific loader/setup blob will be run from secure
+     * mode, regardless of secure_boot. The blob becomes responsible for
+     * changing to non-secure state if implementing a non-secure boot
+     */
+    bool secure_board_setup;
 };
 
 /**

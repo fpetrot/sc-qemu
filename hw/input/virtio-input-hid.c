@@ -191,44 +191,45 @@ static void virtio_input_handle_event(DeviceState *dev, QemuConsole *src,
     virtio_input_event event;
     int qcode;
 
-    switch (evt->kind) {
+    switch (evt->type) {
     case INPUT_EVENT_KIND_KEY:
-        qcode = qemu_input_key_value_to_qcode(evt->key->key);
+        qcode = qemu_input_key_value_to_qcode(evt->u.key->key);
         if (qcode && keymap_qcode[qcode]) {
             event.type  = cpu_to_le16(EV_KEY);
             event.code  = cpu_to_le16(keymap_qcode[qcode]);
-            event.value = cpu_to_le32(evt->key->down ? 1 : 0);
+            event.value = cpu_to_le32(evt->u.key->down ? 1 : 0);
             virtio_input_send(vinput, &event);
         } else {
-            if (evt->key->down) {
+            if (evt->u.key->down) {
                 fprintf(stderr, "%s: unmapped key: %d [%s]\n", __func__,
                         qcode, QKeyCode_lookup[qcode]);
             }
         }
         break;
     case INPUT_EVENT_KIND_BTN:
-        if (keymap_button[evt->btn->button]) {
+        if (keymap_button[evt->u.btn->button]) {
             event.type  = cpu_to_le16(EV_KEY);
-            event.code  = cpu_to_le16(keymap_button[evt->btn->button]);
-            event.value = cpu_to_le32(evt->btn->down ? 1 : 0);
+            event.code  = cpu_to_le16(keymap_button[evt->u.btn->button]);
+            event.value = cpu_to_le32(evt->u.btn->down ? 1 : 0);
             virtio_input_send(vinput, &event);
         } else {
-            if (evt->btn->down) {
+            if (evt->u.btn->down) {
                 fprintf(stderr, "%s: unmapped button: %d [%s]\n", __func__,
-                        evt->btn->button, InputButton_lookup[evt->btn->button]);
+                        evt->u.btn->button,
+                        InputButton_lookup[evt->u.btn->button]);
             }
         }
         break;
     case INPUT_EVENT_KIND_REL:
         event.type  = cpu_to_le16(EV_REL);
-        event.code  = cpu_to_le16(axismap_rel[evt->rel->axis]);
-        event.value = cpu_to_le32(evt->rel->value);
+        event.code  = cpu_to_le16(axismap_rel[evt->u.rel->axis]);
+        event.value = cpu_to_le32(evt->u.rel->value);
         virtio_input_send(vinput, &event);
         break;
     case INPUT_EVENT_KIND_ABS:
         event.type  = cpu_to_le16(EV_ABS);
-        event.code  = cpu_to_le16(axismap_abs[evt->abs->axis]);
-        event.value = cpu_to_le32(evt->abs->value);
+        event.code  = cpu_to_le16(axismap_abs[evt->u.abs->axis]);
+        event.value = cpu_to_le32(evt->u.abs->value);
         virtio_input_send(vinput, &event);
         break;
     default:
@@ -252,7 +253,11 @@ static void virtio_input_handle_sync(DeviceState *dev)
 static void virtio_input_hid_realize(DeviceState *dev, Error **errp)
 {
     VirtIOInputHID *vhid = VIRTIO_INPUT_HID(dev);
+
     vhid->hs = qemu_input_handler_register(dev, vhid->handler);
+    if (vhid->display && vhid->hs) {
+        qemu_input_handler_bind(vhid->hs, vhid->display, vhid->head, NULL);
+    }
 }
 
 static void virtio_input_hid_unrealize(DeviceState *dev, Error **errp)
@@ -301,10 +306,18 @@ static void virtio_input_hid_handle_status(VirtIOInput *vinput,
     }
 }
 
+static Property virtio_input_hid_properties[] = {
+    DEFINE_PROP_STRING("display", VirtIOInputHID, display),
+    DEFINE_PROP_UINT32("head", VirtIOInputHID, head, 0),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
 static void virtio_input_hid_class_init(ObjectClass *klass, void *data)
 {
+    DeviceClass *dc = DEVICE_CLASS(klass);
     VirtIOInputClass *vic = VIRTIO_INPUT_CLASS(klass);
 
+    dc->props          = virtio_input_hid_properties;
     vic->realize       = virtio_input_hid_realize;
     vic->unrealize     = virtio_input_hid_unrealize;
     vic->change_active = virtio_input_hid_change_active;

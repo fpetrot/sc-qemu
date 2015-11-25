@@ -96,16 +96,16 @@ World *rocker_get_world(Rocker *r, enum rocker_world_type type)
 
 RockerSwitch *qmp_query_rocker(const char *name, Error **errp)
 {
-    RockerSwitch *rocker = g_malloc0(sizeof(*rocker));
+    RockerSwitch *rocker;
     Rocker *r;
 
     r = rocker_find(name);
     if (!r) {
-        error_set(errp, ERROR_CLASS_GENERIC_ERROR,
-                  "rocker %s not found", name);
+        error_setg(errp, "rocker %s not found", name);
         return NULL;
     }
 
+    rocker = g_new0(RockerSwitch, 1);
     rocker->name = g_strdup(r->name);
     rocker->id = r->switch_id;
     rocker->ports = r->fp_ports;
@@ -121,8 +121,7 @@ RockerPortList *qmp_query_rocker_ports(const char *name, Error **errp)
 
     r = rocker_find(name);
     if (!r) {
-        error_set(errp, ERROR_CLASS_GENERIC_ERROR,
-                  "rocker %s not found", name);
+        error_setg(errp, "rocker %s not found", name);
         return NULL;
     }
 
@@ -192,11 +191,13 @@ static int tx_consume(Rocker *r, DescInfo *info)
         if (!tlvs[ROCKER_TLV_TX_L3_CSUM_OFF]) {
             return -ROCKER_EINVAL;
         }
+        break;
     case ROCKER_TX_OFFLOAD_TSO:
         if (!tlvs[ROCKER_TLV_TX_TSO_MSS] ||
             !tlvs[ROCKER_TLV_TX_TSO_HDR_LEN]) {
             return -ROCKER_EINVAL;
         }
+        break;
     }
 
     if (tlvs[ROCKER_TLV_TX_L3_CSUM_OFF]) {
@@ -262,9 +263,7 @@ err_bad_io:
 err_no_mem:
 err_bad_attr:
     for (i = 0; i < ROCKER_TX_FRAGS_MAX; i++) {
-        if (iov[i].iov_base) {
-            g_free(iov[i].iov_base);
-        }
+        g_free(iov[i].iov_base);
     }
 
     return err;
@@ -600,7 +599,7 @@ static DescRing *rocker_get_rx_ring_by_pport(Rocker *r,
 }
 
 int rx_produce(World *world, uint32_t pport,
-               const struct iovec *iov, int iovcnt)
+               const struct iovec *iov, int iovcnt, uint8_t copy_to_cpu)
 {
     Rocker *r = world_rocker(world);
     PCIDevice *dev = (PCIDevice *)r;
@@ -641,6 +640,10 @@ int rx_produce(World *world, uint32_t pport,
     if (data_size > frag_max_len) {
         err = -ROCKER_EMSGSIZE;
         goto out;
+    }
+
+    if (copy_to_cpu) {
+        rx_flags |= ROCKER_RX_FLAGS_FWD_OFFLOAD;
     }
 
     /* XXX calc rx flags/csum */
@@ -1357,7 +1360,7 @@ static int pci_rocker_init(PCIDevice *dev)
         r->fp_ports = ROCKER_FP_PORTS_MAX;
     }
 
-    r->rings = g_malloc(sizeof(DescRing *) * rocker_pci_ring_count(r));
+    r->rings = g_new(DescRing *, rocker_pci_ring_count(r));
     if (!r->rings) {
         goto err_rings_alloc;
     }
