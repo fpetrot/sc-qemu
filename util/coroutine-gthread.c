@@ -102,7 +102,7 @@ static inline GThread *create_thread(GThreadFunc func, gpointer data)
 #endif
 
 
-static void __attribute__((constructor)) coroutine_init(void)
+static void QEMU_ATTR_CONSTRUCTOR(coroutine_init)(void)
 {
 #if !GLIB_CHECK_VERSION(2, 31, 0)
     if (!g_thread_supported()) {

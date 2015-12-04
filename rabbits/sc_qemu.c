@@ -1,3 +1,5 @@
+#include <glib.h>
+
 #include "qemu-common.h"
 #include "qemu/main-loop.h"
 #include "hw/sysbus.h"
@@ -18,6 +20,10 @@ struct mmio_ctx {
     qemu_context *qemu_ctx;
     uint32_t base;
 };
+
+typedef void (*ctor_fn)(void);
+static GArray *ctor_fns = NULL;
+static size_t ctor_count = 0;
 
 static uint64_t sc_mmio_read(void *opaque, hwaddr offset,
                            unsigned size)
@@ -109,6 +115,8 @@ int qemu_main(int argc, char const * argv[], char **envp);
 qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 {
     char num_cpu[4];
+    size_t i;
+    ctor_fn ctor;
 
     snprintf(num_cpu, sizeof(num_cpu), "%d", s->num_cpu);
 
@@ -117,17 +125,25 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
         "-M", "sc-qemu",
         "-cpu", s->cpu_model,
         "-smp", num_cpu,
-#if 0
-        "-serial", "stdio",
-#else
         "-nographic",
-#endif
-        /*"-d", "in_asm,exec",*/
+        /*"-serial", "stdio",*/
+        /*"-serial", "null",*/
+        /*"-serial", "null",*/
+        /*"-serial", "null",*/
+        /*"-d", "in_asm,exec,cpu",*/
         /*"-D", "qemu.log",*/
     };
 
     qemu_context *ctx;
     int qemu_argc = ARRAY_SIZE(qemu_argv);
+
+    for (i = 0; i < ctor_count; i++) {
+        ctor = g_array_index(ctor_fns, ctor_fn, i);
+        ctor();
+    }
+    g_array_free(ctor_fns, TRUE);
+    ctor_fns = NULL;
+    ctor_count = 0;
 
     qemu_main(qemu_argc, qemu_argv, NULL);
 
@@ -156,3 +172,12 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
     return ctx;
 }
 
+void sc_qemu_do_register_ctor(ctor_fn f)
+{
+    if (ctor_fns == NULL) {
+        ctor_fns = g_array_new(FALSE, FALSE, sizeof (ctor_fn));
+    }
+
+    g_array_append_val(ctor_fns, f);
+    ctor_count++;
+}

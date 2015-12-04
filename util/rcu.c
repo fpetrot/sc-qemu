@@ -343,7 +343,7 @@ void rcu_after_fork(void)
     rcu_init_complete();
 }
 
-static void __attribute__((__constructor__)) rcu_init(void)
+static void QEMU_ATTR_CONSTRUCTOR(rcu_init)(void)
 {
 #ifdef CONFIG_POSIX
     pthread_atfork(rcu_init_lock, rcu_init_unlock, rcu_init_unlock);

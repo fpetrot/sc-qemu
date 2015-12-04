@@ -4094,7 +4094,7 @@ static void monitor_readline_flush(void *opaque)
     monitor_flush(opaque);
 }
 
-static void __attribute__((constructor)) monitor_lock_init(void)
+static void QEMU_ATTR_CONSTRUCTOR(monitor_lock_init)(void)
 {
     qemu_mutex_init(&monitor_lock);
 }

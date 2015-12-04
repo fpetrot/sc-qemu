@@ -378,7 +378,7 @@ int socket_init(void)
  * glib.  For example, the g_slice allocator will not be thread-safe
  * and cause crashes.
  */
-static void __attribute__((constructor)) thread_init(void)
+static void QEMU_ATTR_CONSTRUCTOR(thread_init)(void)
 {
     if (!g_thread_supported()) {
        g_thread_init(NULL);

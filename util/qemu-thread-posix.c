@@ -439,7 +439,7 @@ static void qemu_thread_atexit_run(void *arg)
     notifier_list_notify(&ntd.list, NULL);
 }
 
-static void __attribute__((constructor)) qemu_thread_atexit_init(void)
+static void QEMU_ATTR_CONSTRUCTOR(qemu_thread_atexit_init)(void)
 {
     pthread_key_create(&exit_key, qemu_thread_atexit_run);
 }

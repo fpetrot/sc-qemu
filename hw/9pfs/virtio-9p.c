@@ -3288,7 +3288,7 @@ void handle_9p_output(VirtIODevice *vdev, VirtQueue *vq)
     free_pdu(s, pdu);
 }
 
-static void __attribute__((__constructor__)) virtio_9p_set_fd_limit(void)
+static void QEMU_ATTR_CONSTRUCTOR(virtio_9p_set_fd_limit)(void)
 {
     struct rlimit rlim;
     if (getrlimit(RLIMIT_NOFILE, &rlim) < 0) {

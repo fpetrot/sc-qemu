@@ -109,4 +109,16 @@
 #define GCC_FMT_ATTR(n, m)
 #endif
 
+#if defined(CONFIG_RABBITS)
+void sc_qemu_do_register_ctor(void (*)(void));
+#define QEMU_ATTR_CONSTRUCTOR(fct)                                            \
+    fct(void);                                                                \
+    static void __attribute__((__constructor__)) sc_qemu_register_##fct(void) \
+    {                                                                         \
+        sc_qemu_do_register_ctor(fct);                                        \
+    }                                                                         \
+    static void fct
+#else
+#define QEMU_ATTR_CONSTRUCTOR(fct) __attribute__((__constructor__)) fct
+#endif
 #endif /* COMPILER_H */

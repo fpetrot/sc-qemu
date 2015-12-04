@@ -2699,14 +2699,14 @@ void flush_icache_range(uintptr_t start, uintptr_t stop)
 #if defined _AIX
 #include <sys/systemcfg.h>
 
-static void __attribute__((constructor)) tcg_cache_init(void)
+static void QEMU_ATTR_CONSTRUCTOR(tcg_cache_init)(void)
 {
     icache_bsize = _system_configuration.icache_line;
     dcache_bsize = _system_configuration.dcache_line;
 }
 
 #elif defined __linux__
-static void __attribute__((constructor)) tcg_cache_init(void)
+static void QEMU_ATTR_CONSTRUCTOR(tcg_cache_init)(void)
 {
     unsigned long dsize = qemu_getauxval(AT_DCACHEBSIZE);
     unsigned long isize = qemu_getauxval(AT_ICACHEBSIZE);
@@ -2729,7 +2729,7 @@ static void __attribute__((constructor)) tcg_cache_init(void)
 #include <sys/types.h>
 #include <sys/sysctl.h>
 
-static void __attribute__((constructor)) tcg_cache_init(void)
+static void QEMU_ATTR_CONSTRUCTOR(tcg_cache_init)(void)
 {
     size_t len;
     unsigned cacheline;
@@ -2752,7 +2752,7 @@ static void __attribute__((constructor)) tcg_cache_init(void)
 #include <sys/types.h>
 #include <sys/sysctl.h>
 
-static void __attribute__((constructor)) tcg_cache_init(void)
+static void QEMU_ATTR_CONSTRUCTOR(tcg_cache_init)(void)
 {
     size_t len = 4;
     unsigned cacheline;
