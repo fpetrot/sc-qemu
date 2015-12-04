@@ -17,6 +17,7 @@ typedef enum sc_qemu_qdev_arm_e {
      *  0: GIC  base address
      */
     SC_QDEV_ARM_A15PRIV = SC_QDEV_LAST,
+    SC_QDEV_ARM_GIC,
 } sc_qemu_qdev_arm_e;
 
 typedef enum sc_qdev_a15priv_mmio_e {
