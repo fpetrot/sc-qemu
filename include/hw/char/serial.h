@@ -77,6 +77,7 @@ struct SerialState {
 
 extern const VMStateDescription vmstate_serial;
 extern const MemoryRegionOps serial_io_ops;
+extern const MemoryRegionOps serial_mm_ops[3];
 
 void serial_realize_core(SerialState *s, Error **errp);
 void serial_exit_core(SerialState *s);
@@ -94,4 +95,6 @@ SerialState *serial_mm_init(MemoryRegion *address_space,
 #define TYPE_ISA_SERIAL "isa-serial"
 void serial_hds_isa_init(ISABus *bus, int n);
 
+/* serial-qom.c */
+#define TYPE_SERIAL "serial"
 #endif

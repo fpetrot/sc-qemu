@@ -925,7 +925,7 @@ static void serial_mm_write(void *opaque, hwaddr addr,
     serial_ioport_write(s, addr >> s->it_shift, value, 1);
 }
 
-static const MemoryRegionOps serial_mm_ops[3] = {
+const MemoryRegionOps serial_mm_ops[3] = {
     [DEVICE_NATIVE_ENDIAN] = {
         .read = serial_mm_read,
         .write = serial_mm_write,

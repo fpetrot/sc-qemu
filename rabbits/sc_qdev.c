@@ -1,6 +1,7 @@
 #include "qemu-common.h"
 #include "hw/sysbus.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/char.h"
 #include "hw/char/serial.h"
 #include "exec/address-spaces.h"
 
@@ -12,6 +13,7 @@ sc_qemu_qdev* sc_qemu_qdev_create(qemu_context *ctx, int devid, ...)
 {
     sc_qemu_qdev *ret = NULL;
     va_list ap;
+    static int chr_idx = 0;
 
     va_start(ap, devid);
 
@@ -22,15 +24,16 @@ sc_qemu_qdev* sc_qemu_qdev_create(qemu_context *ctx, int devid, ...)
     switch (devid) {
     case SC_QDEV_16550:
         {
-            uint32_t base_addr = va_arg(ap, uint32_t);
-            int regshift = va_arg(ap, int);
-            sc_qemu_qdev *int_ctrl = va_arg(ap, sc_qemu_qdev*);
-            int irq_idx = va_arg(ap, int);
-            int baudbase = va_arg(ap, int);
+            uint32_t regshift = va_arg(ap, uint32_t);
+            uint32_t baudbase = va_arg(ap, uint32_t);
 
-            serial_mm_init(get_system_memory(), base_addr, regshift,
-                           qdev_get_gpio_in(int_ctrl->dev, irq_idx), baudbase,
-                           serial_hds[0], DEVICE_NATIVE_ENDIAN);
+            ret->dev = qdev_create(NULL, "serial");
+
+            qdev_prop_set_uint32(ret->dev, "it-shift", regshift);
+            qdev_prop_set_uint32(ret->dev, "baudbase", baudbase);
+            qdev_prop_set_chr(ret->dev, "chardev", serial_hds[chr_idx++]);
+
+            qdev_init_nofail(ret->dev);
         }
         break;
 
