@@ -59,7 +59,11 @@ void sc_qemu_qdev_mmio_map(sc_qemu_qdev *dev, int mmio_id, uint32_t addr)
 void sc_qemu_qdev_irq_connect(sc_qemu_qdev *src, int src_idx,
                               sc_qemu_qdev *dst, int dst_idx)
 {
-    sysbus_connect_irq(SYS_BUS_DEVICE(src->dev), src_idx, qdev_get_gpio_in(dst->dev, dst_idx));
+    if (src->id == SC_QDEV_CPU) {
+        qdev_connect_gpio_out(src->dev, src_idx, qdev_get_gpio_in(dst->dev, dst_idx));
+    } else {
+        sysbus_connect_irq(SYS_BUS_DEVICE(src->dev), src_idx, qdev_get_gpio_in(dst->dev, dst_idx));
+    }
 }
 
 void sc_qemu_qdev_irq_update(sc_qemu_qdev *dev, int irq_idx, int level)
