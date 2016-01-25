@@ -49,6 +49,9 @@ struct sc_qemu_init_struct {
     systemc_import   sc_import;     /* < [in]  SystemC callbacks used by QEMU  */
     const char       *cpu_model;    /* < [in]  Requested cpu model */
     int              num_cpu;       /* < [in]  Requested number of cpus */
+
+    int64_t          max_run_time;  /* < [in]  Maximum cpus step in ns of the QEMU virtual clock. 0 is no limit */
+    int              cpu_mips_shift;/* < [in]  QEMU icount shift option */
     void             *opaque;       /* < [in]  Opaque used as parameter of SystemC cb */
 };
 

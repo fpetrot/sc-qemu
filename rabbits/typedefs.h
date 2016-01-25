@@ -37,7 +37,7 @@ typedef enum sc_qemu_qdev_e {
 
 typedef qemu_context* (*sc_qemu_init_fn)(sc_qemu_init_struct *);
 
-typedef bool (*sc_qemu_cpu_loop_fn)(qemu_context *);
+typedef bool (*sc_qemu_cpu_loop_fn)(qemu_context *, int64_t *elapsed);
 typedef sc_qemu_qdev* (*sc_qemu_cpu_get_qdev_fn)(qemu_context *, int cpu_idx);
 typedef void (*sc_qemu_map_io_fn)(qemu_context *, uint32_t base_address, uint32_t size);
 typedef void (*sc_qemu_map_dmi_fn)(qemu_context *, uint32_t base_address, uint32_t size, void *data);

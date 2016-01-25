@@ -2,6 +2,7 @@
 
 #include "qemu-common.h"
 #include "qemu/main-loop.h"
+#include "qemu/timer.h"
 #include "hw/sysbus.h"
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
@@ -54,9 +55,19 @@ static const MemoryRegionOps sc_mmio_ops = {
 bool main_loop_should_exit(void);
 /* ---- */
 
-static bool sc_qemu_cpu_loop(qemu_context *ctx)
+static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed)
 {
+    int64_t before;
+
+    if (elapsed) {
+        before = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    }
+
     main_loop_wait(true);
+
+    if (elapsed) {
+        *elapsed = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - before;
+    }
 
     return main_loop_should_exit();
 }
@@ -112,6 +123,14 @@ static void sc_qemu_start_gdbserver(qemu_context *ctx, const char *port)
 
 int qemu_main(int argc, char const * argv[], char **envp);
 
+
+static void deadline_cb(void *opaque)
+{
+    qemu_context *ctx = (qemu_context *) opaque;
+
+    timer_mod(ctx->deadline, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ctx->max_run_time);
+}
+
 qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 {
     char num_cpu[4];
@@ -120,22 +139,29 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 
     snprintf(num_cpu, sizeof(num_cpu), "%d", s->num_cpu);
 
-    char const * qemu_argv[] = {
+    char const * qemu_base_argv[] = {
         "",
         "-M", "sc-qemu",
         "-cpu", s->cpu_model,
         "-smp", num_cpu,
         "-nographic",
-        /*"-serial", "stdio",*/
-        /*"-serial", "null",*/
-        /*"-serial", "null",*/
-        /*"-serial", "null",*/
-        /*"-d", "in_asm,exec,cpu",*/
-        /*"-D", "qemu.log",*/
     };
 
+    char icount_option[] = "shift=00,align=off";
+
+    char const * qemu_argv[ARRAY_SIZE(qemu_base_argv) + 2] = { 0 };
+    int qemu_argc = ARRAY_SIZE(qemu_base_argv);
+
+    memcpy(qemu_argv, qemu_base_argv, sizeof(qemu_base_argv));
+
+    if (s->max_run_time > 0) {
+        /* Enable icount */
+        snprintf(icount_option, strlen(icount_option), "shift=%02d,align=off", s->cpu_mips_shift);
+        qemu_argv[qemu_argc++] = "-icount";
+        qemu_argv[qemu_argc++] = icount_option;
+    }
+
     qemu_context *ctx;
-    int qemu_argc = ARRAY_SIZE(qemu_argv);
 
     for (i = 0; i < ctor_count; i++) {
         ctor = g_array_index(ctor_fns, ctor_fn, i);
@@ -168,6 +194,13 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 
     /* QEMU to SystemC functions */
     memcpy(&(ctx->sysc), &(s->sc_import), sizeof(systemc_import));
+
+    if (s->max_run_time > 0) {
+        /* Limit the number of instructions QEMU executes when calling the main loop */
+        ctx->deadline = timer_new_ns(QEMU_CLOCK_VIRTUAL, deadline_cb, ctx);
+        ctx->max_run_time = s->max_run_time;
+        timer_mod(ctx->deadline, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ctx->max_run_time);
+    }
 
     return ctx;
 }
