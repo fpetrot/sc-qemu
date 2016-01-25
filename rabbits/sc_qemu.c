@@ -156,7 +156,7 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 
     if (s->max_run_time > 0) {
         /* Enable icount */
-        snprintf(icount_option, strlen(icount_option), "shift=%02d,align=off", s->cpu_mips_shift);
+        snprintf(icount_option, sizeof(icount_option), "shift=%d,align=off", s->cpu_mips_shift);
         qemu_argv[qemu_argc++] = "-icount";
         qemu_argv[qemu_argc++] = icount_option;
     }
