@@ -34,7 +34,7 @@ endif
 endif
 
 ifdef CONFIG_RABBITS
-RABBITS_LIB=libqemu-system-$(TARGET_NAME).so
+RABBITS_LIB=libqemu-system-$(TARGET_NAME)$(DSOSUF)
 endif
 
 PROGS=$(QEMU_PROG) $(QEMU_PROGW)
