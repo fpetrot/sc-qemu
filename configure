@@ -1574,10 +1574,12 @@ int main(void) { return tls_var; }
 
 EOF
   if test "$rabbits" = "yes" ; then
-    if compile_prog "-fPIC -DPIC" ""; then
-      QEMU_CFLAGS="-fPIC -DPIC $QEMU_CFLAGS"
-    else
-      error_exit "PIC compilation required for rabbits but not available"
+    if test $mingw32 != "yes" ; then
+      if compile_prog "-fPIC -DPIC" ""; then
+        QEMU_CFLAGS="-fPIC -DPIC $QEMU_CFLAGS"
+      else
+        error_exit "PIC compilation required for rabbits but not available"
+      fi
     fi
   elif compile_prog "-fPIE -DPIE" "-pie"; then
     QEMU_CFLAGS="-fPIE -DPIE $QEMU_CFLAGS"
