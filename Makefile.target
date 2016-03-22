@@ -111,7 +111,7 @@ obj-$(CONFIG_LIBDECNUMBER) += libdecnumber/dpd/decimal32.o
 obj-$(CONFIG_LIBDECNUMBER) += libdecnumber/dpd/decimal64.o
 obj-$(CONFIG_LIBDECNUMBER) += libdecnumber/dpd/decimal128.o
 
-obj-y += rabbits/
+obj-y += sc-qemu/
 
 #########################################################
 # Linux user emulator target
@@ -207,7 +207,7 @@ ifdef CONFIG_DARWIN
 endif
 
 $(RABBITS_LIB): $(all-obj-y) ../libqemuutil.a ../libqemustub.a
-	$(call SO_LINK, $(filter-out %.mak, $^),$(RABBITS_LIB),$(SRC_PATH)/rabbits/exports.version)
+	$(call SO_LINK, $(filter-out %.mak, $^),$(RABBITS_LIB),$(SRC_PATH)/sc-qemu/exports.version)
 
 
 gdbstub-xml.c: $(TARGET_XML_FILES) $(SRC_PATH)/scripts/feature_to_c.sh
@@ -231,8 +231,12 @@ ifdef CONFIG_TRACE_SYSTEMTAP
 endif
 
 install: all
+ifdef CONFIG_RABBITS
+	$(call install-lib,$(RABBITS_LIB),$(DESTDIR)$(libdir)/rabbits)
+else
 ifneq ($(PROGS),)
 	$(call install-prog,$(PROGS),$(DESTDIR)$(bindir))
+endif
 endif
 ifdef CONFIG_TRACE_SYSTEMTAP
 	$(INSTALL_DIR) "$(DESTDIR)$(qemu_datadir)/../systemtap/tapset"

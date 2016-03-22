@@ -112,5 +112,5 @@ qga-vss-dll-obj-y = qga/
 ivshmem-client-obj-y = contrib/ivshmem-client/
 ivshmem-server-obj-y = contrib/ivshmem-server/
 
-common-obj-$(CONFIG_RABBITS) += rabbits/
-obj-$(CONFIG_RABBITS) += rabbits/
+common-obj-$(CONFIG_RABBITS) += sc-qemu/
+obj-$(CONFIG_RABBITS) += sc-qemu/
