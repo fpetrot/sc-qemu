@@ -21,8 +21,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "block/block_int.h"
+#include "sysemu/block-backend.h"
 #include "qemu/module.h"
 #include <zlib.h>
 #include "qapi/qmp/qerror.h"
@@ -119,11 +121,7 @@ static int qcow_open(BlockDriverState *bs, QDict *options, int flags,
         goto fail;
     }
     if (header.version != QCOW_VERSION) {
-        char version[64];
-        snprintf(version, sizeof(version), "QCOW version %" PRIu32,
-                 header.version);
-        error_setg(errp, QERR_UNKNOWN_BLOCK_FORMAT_FEATURE,
-                   bdrv_get_device_or_node_name(bs), "qcow", version);
+        error_setg(errp, "Unsupported qcow version %" PRIu32, header.version);
         ret = -ENOTSUP;
         goto fail;
     }
@@ -488,7 +486,7 @@ static uint64_t get_cluster_offset(BlockDriverState *bs,
 }
 
 static int64_t coroutine_fn qcow_co_get_block_status(BlockDriverState *bs,
-        int64_t sector_num, int nb_sectors, int *pnum)
+        int64_t sector_num, int nb_sectors, int *pnum, BlockDriverState **file)
 {
     BDRVQcowState *s = bs->opaque;
     int index_in_cluster, n;
@@ -509,6 +507,7 @@ static int64_t coroutine_fn qcow_co_get_block_status(BlockDriverState *bs,
         return BDRV_BLOCK_DATA;
     }
     cluster_offset |= (index_in_cluster << BDRV_SECTOR_BITS);
+    *file = bs->file->bs;
     return BDRV_BLOCK_DATA | BDRV_BLOCK_OFFSET_VALID | cluster_offset;
 }
 
@@ -778,7 +777,7 @@ static int qcow_create(const char *filename, QemuOpts *opts, Error **errp)
     int flags = 0;
     Error *local_err = NULL;
     int ret;
-    BlockDriverState *qcow_bs;
+    BlockBackend *qcow_blk;
 
     /* Read out options */
     total_size = ROUND_UP(qemu_opt_get_size_del(opts, BLOCK_OPT_SIZE, 0),
@@ -794,15 +793,18 @@ static int qcow_create(const char *filename, QemuOpts *opts, Error **errp)
         goto cleanup;
     }
 
-    qcow_bs = NULL;
-    ret = bdrv_open(&qcow_bs, filename, NULL, NULL,
-                    BDRV_O_RDWR | BDRV_O_PROTOCOL, &local_err);
-    if (ret < 0) {
+    qcow_blk = blk_new_open(filename, NULL, NULL,
+                            BDRV_O_RDWR | BDRV_O_CACHE_WB | BDRV_O_PROTOCOL,
+                            &local_err);
+    if (qcow_blk == NULL) {
         error_propagate(errp, local_err);
+        ret = -EIO;
         goto cleanup;
     }
 
-    ret = bdrv_truncate(qcow_bs, 0);
+    blk_set_allow_write_beyond_eof(qcow_blk, true);
+
+    ret = blk_truncate(qcow_blk, 0);
     if (ret < 0) {
         goto exit;
     }
@@ -842,13 +844,13 @@ static int qcow_create(const char *filename, QemuOpts *opts, Error **errp)
     }
 
     /* write all the data */
-    ret = bdrv_pwrite(qcow_bs, 0, &header, sizeof(header));
+    ret = blk_pwrite(qcow_blk, 0, &header, sizeof(header));
     if (ret != sizeof(header)) {
         goto exit;
     }
 
     if (backing_file) {
-        ret = bdrv_pwrite(qcow_bs, sizeof(header),
+        ret = blk_pwrite(qcow_blk, sizeof(header),
             backing_file, backing_filename_len);
         if (ret != backing_filename_len) {
             goto exit;
@@ -858,7 +860,7 @@ static int qcow_create(const char *filename, QemuOpts *opts, Error **errp)
     tmp = g_malloc0(BDRV_SECTOR_SIZE);
     for (i = 0; i < ((sizeof(uint64_t)*l1_size + BDRV_SECTOR_SIZE - 1)/
         BDRV_SECTOR_SIZE); i++) {
-        ret = bdrv_pwrite(qcow_bs, header_size +
+        ret = blk_pwrite(qcow_blk, header_size +
             BDRV_SECTOR_SIZE*i, tmp, BDRV_SECTOR_SIZE);
         if (ret != BDRV_SECTOR_SIZE) {
             g_free(tmp);
@@ -869,7 +871,7 @@ static int qcow_create(const char *filename, QemuOpts *opts, Error **errp)
     g_free(tmp);
     ret = 0;
 exit:
-    bdrv_unref(qcow_bs);
+    blk_unref(qcow_blk);
 cleanup:
     g_free(backing_file);
     return ret;

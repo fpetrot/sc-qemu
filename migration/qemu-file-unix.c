@@ -21,6 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/error-report.h"
 #include "qemu/iov.h"
@@ -52,18 +53,16 @@ static ssize_t socket_writev_buffer(void *opaque, struct iovec *iov, int iovcnt,
         }
 
         if (size > 0) {
-            err = socket_error();
-
-            if (err != EAGAIN && err != EWOULDBLOCK) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 error_report("socket_writev_buffer: Got err=%d for (%zu/%zu)",
-                             err, (size_t)size, (size_t)len);
+                             errno, (size_t)size, (size_t)len);
                 /*
                  * If I've already sent some but only just got the error, I
                  * could return the amount validly sent so far and wait for the
                  * next call to report the error, but I'd rather flag the error
                  * immediately.
                  */
-                return -err;
+                return -errno;
             }
 
             /* Emulate blocking */
@@ -72,7 +71,8 @@ static ssize_t socket_writev_buffer(void *opaque, struct iovec *iov, int iovcnt,
             pfd.fd = s->fd;
             pfd.events = G_IO_OUT | G_IO_ERR;
             pfd.revents = 0;
-            g_poll(&pfd, 1 /* 1 fd */, -1 /* no timeout */);
+            TFR(err = g_poll(&pfd, 1, -1 /* no timeout */));
+            /* Errors other than EINTR intentionally ignored */
         }
      }
 
@@ -97,15 +97,15 @@ static ssize_t socket_get_buffer(void *opaque, uint8_t *buf, int64_t pos,
         if (len != -1) {
             break;
         }
-        if (socket_error() == EAGAIN) {
+        if (errno == EAGAIN) {
             yield_until_fd_readable(s->fd);
-        } else if (socket_error() != EINTR) {
+        } else if (errno != EINTR) {
             break;
         }
     }
 
     if (len == -1) {
-        len = -socket_error();
+        len = -errno;
     }
     return len;
 }

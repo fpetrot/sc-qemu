@@ -1,5 +1,6 @@
 #include <glib.h>
 
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/main-loop.h"
 #include "qemu/timer.h"

@@ -11,24 +11,18 @@
  * See the COPYING file in the top-level directory.
  */
 
+#include "qemu/osdep.h"
 #include <glib.h>
-#include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
-#include <unistd.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <dirent.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <inttypes.h>
 #include "qga/guest-agent-core.h"
 #include "qga-qmp-commands.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/queue.h"
 #include "qemu/host-utils.h"
 #include "qemu/sockets.h"
+#include "qemu/base64.h"
 
 #ifndef CONFIG_HAS_ENVIRON
 #ifdef __APPLE__
@@ -216,9 +210,16 @@ void qmp_guest_set_time(bool has_time, int64_t time_ns, Error **errp)
     }
 }
 
+typedef enum {
+    RW_STATE_NEW,
+    RW_STATE_READING,
+    RW_STATE_WRITING,
+} RwState;
+
 typedef struct GuestFileHandle {
     uint64_t id;
     FILE *fh;
+    RwState state;
     QTAILQ_ENTRY(GuestFileHandle) next;
 } GuestFileHandle;
 
@@ -460,6 +461,17 @@ struct GuestFileRead *qmp_guest_file_read(int64_t handle, bool has_count,
     }
 
     fh = gfh->fh;
+
+    /* explicitly flush when switching from writing to reading */
+    if (gfh->state == RW_STATE_WRITING) {
+        int ret = fflush(fh);
+        if (ret == EOF) {
+            error_setg_errno(errp, errno, "failed to flush file");
+            return NULL;
+        }
+        gfh->state = RW_STATE_NEW;
+    }
+
     buf = g_malloc0(count+1);
     read_count = fread(buf, 1, count, fh);
     if (ferror(fh)) {
@@ -473,6 +485,7 @@ struct GuestFileRead *qmp_guest_file_read(int64_t handle, bool has_count,
         if (read_count) {
             read_data->buf_b64 = g_base64_encode(buf, read_count);
         }
+        gfh->state = RW_STATE_READING;
     }
     g_free(buf);
     clearerr(fh);
@@ -496,7 +509,20 @@ GuestFileWrite *qmp_guest_file_write(int64_t handle, const char *buf_b64,
     }
 
     fh = gfh->fh;
-    buf = g_base64_decode(buf_b64, &buf_len);
+
+    if (gfh->state == RW_STATE_READING) {
+        int ret = fseek(fh, 0, SEEK_CUR);
+        if (ret == -1) {
+            error_setg_errno(errp, errno, "failed to seek file");
+            return NULL;
+        }
+        gfh->state = RW_STATE_NEW;
+    }
+
+    buf = qbase64_decode(buf_b64, -1, &buf_len, errp);
+    if (!buf) {
+        return NULL;
+    }
 
     if (!has_count) {
         count = buf_len;
@@ -515,6 +541,7 @@ GuestFileWrite *qmp_guest_file_write(int64_t handle, const char *buf_b64,
         write_data = g_new0(GuestFileWrite, 1);
         write_data->count = write_count;
         write_data->eof = feof(fh);
+        gfh->state = RW_STATE_WRITING;
     }
     g_free(buf);
     clearerr(fh);
@@ -523,14 +550,24 @@ GuestFileWrite *qmp_guest_file_write(int64_t handle, const char *buf_b64,
 }
 
 struct GuestFileSeek *qmp_guest_file_seek(int64_t handle, int64_t offset,
-                                          int64_t whence, Error **errp)
+                                          GuestFileWhence *whence_code,
+                                          Error **errp)
 {
     GuestFileHandle *gfh = guest_file_handle_find(handle, errp);
     GuestFileSeek *seek_data = NULL;
     FILE *fh;
     int ret;
+    int whence;
+    Error *err = NULL;
 
     if (!gfh) {
+        return NULL;
+    }
+
+    /* We stupidly exposed 'whence':'int' in our qapi */
+    whence = ga_parse_whence(whence_code, &err);
+    if (err) {
+        error_propagate(errp, err);
         return NULL;
     }
 
@@ -538,10 +575,15 @@ struct GuestFileSeek *qmp_guest_file_seek(int64_t handle, int64_t offset,
     ret = fseek(fh, offset, whence);
     if (ret == -1) {
         error_setg_errno(errp, errno, "failed to seek file");
+        if (errno == ESPIPE) {
+            /* file is non-seekable, stdio shouldn't be buffering anyways */
+            gfh->state = RW_STATE_NEW;
+        }
     } else {
         seek_data = g_new0(GuestFileSeek, 1);
         seek_data->position = ftell(fh);
         seek_data->eof = feof(fh);
+        gfh->state = RW_STATE_NEW;
     }
     clearerr(fh);
 
@@ -562,6 +604,8 @@ void qmp_guest_file_flush(int64_t handle, Error **errp)
     ret = fflush(fh);
     if (ret == EOF) {
         error_setg_errno(errp, errno, "failed to flush file");
+    } else {
+        gfh->state = RW_STATE_NEW;
     }
 }
 
@@ -1909,7 +1953,10 @@ void qmp_guest_set_user_password(const char *username,
     char *chpasswddata = NULL;
     size_t chpasswdlen;
 
-    rawpasswddata = (char *)g_base64_decode(password, &rawpasswdlen);
+    rawpasswddata = (char *)qbase64_decode(password, -1, &rawpasswdlen, errp);
+    if (!rawpasswddata) {
+        return;
+    }
     rawpasswddata = g_renew(char, rawpasswddata, rawpasswdlen + 1);
     rawpasswddata[rawpasswdlen] = '\0';
 
@@ -2193,7 +2240,7 @@ GuestMemoryBlockList *qmp_guest_get_memory_blocks(Error **errp)
          */
         if (errno != ENOENT) {
             error_setg_errno(errp, errno, "Can't open directory"
-                             "\"/sys/devices/system/memory/\"\n");
+                             "\"/sys/devices/system/memory/\"");
         }
         return NULL;
     }

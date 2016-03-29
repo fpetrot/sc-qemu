@@ -19,7 +19,6 @@
  * <http://www.gnu.org/licenses/>.
  */
 
-#include "qapi/error.h"
 #include "qemu/typedefs.h"
 #include "qemu/notify.h"
 #include "qemu/option.h"
@@ -195,5 +194,12 @@ uint8_t *acpi_table_next(uint8_t *current);
 unsigned acpi_table_len(void *current);
 void acpi_table_add(const QemuOpts *opts, Error **errp);
 void acpi_table_add_builtin(const QemuOpts *opts, Error **errp);
+
+typedef struct AcpiSlicOem AcpiSlicOem;
+struct AcpiSlicOem {
+  char *id;
+  char *table_id;
+};
+int acpi_get_slic_oem(AcpiSlicOem *oem);
 
 #endif /* !QEMU_HW_ACPI_H */

@@ -121,6 +121,7 @@ struct BlockDriver {
                                BlockReopenQueue *queue, Error **errp);
     void (*bdrv_reopen_commit)(BDRVReopenState *reopen_state);
     void (*bdrv_reopen_abort)(BDRVReopenState *reopen_state);
+    void (*bdrv_join_options)(QDict *options, QDict *old_options);
 
     int (*bdrv_open)(BlockDriverState *bs, QDict *options, int flags,
                      Error **errp);
@@ -135,7 +136,7 @@ struct BlockDriver {
     int (*bdrv_set_key)(BlockDriverState *bs, const char *key);
     int (*bdrv_make_empty)(BlockDriverState *bs);
 
-    void (*bdrv_refresh_filename)(BlockDriverState *bs);
+    void (*bdrv_refresh_filename)(BlockDriverState *bs, QDict *options);
 
     /* aio */
     BlockAIOCB *(*bdrv_aio_readv)(BlockDriverState *bs,
@@ -165,12 +166,14 @@ struct BlockDriver {
     int coroutine_fn (*bdrv_co_discard)(BlockDriverState *bs,
         int64_t sector_num, int nb_sectors);
     int64_t coroutine_fn (*bdrv_co_get_block_status)(BlockDriverState *bs,
-        int64_t sector_num, int nb_sectors, int *pnum);
+        int64_t sector_num, int nb_sectors, int *pnum,
+        BlockDriverState **file);
 
     /*
      * Invalidate any cached meta-data.
      */
     void (*bdrv_invalidate_cache)(BlockDriverState *bs, Error **errp);
+    int (*bdrv_inactivate)(BlockDriverState *bs);
 
     /*
      * Flushes all data that was already written to the OS all the way down to
@@ -242,9 +245,10 @@ struct BlockDriver {
         BdrvCheckMode fix);
 
     int (*bdrv_amend_options)(BlockDriverState *bs, QemuOpts *opts,
-                              BlockDriverAmendStatusCB *status_cb);
+                              BlockDriverAmendStatusCB *status_cb,
+                              void *cb_opaque);
 
-    void (*bdrv_debug_event)(BlockDriverState *bs, BlkDebugEvent event);
+    void (*bdrv_debug_event)(BlockDriverState *bs, BlkdebugEvent event);
 
     /* TODO Better pass a option string/QDict/QemuOpts to add any rule? */
     int (*bdrv_debug_breakpoint)(BlockDriverState *bs, const char *event,
@@ -328,6 +332,9 @@ typedef struct BlockLimits {
 
     /* memory alignment for bounce buffer */
     size_t opt_mem_alignment;
+
+    /* maximum number of iovec elements */
+    int max_iov;
 } BlockLimits;
 
 typedef struct BdrvOpBlocker BdrvOpBlocker;
@@ -342,7 +349,8 @@ typedef struct BdrvAioNotifier {
 } BdrvAioNotifier;
 
 struct BdrvChildRole {
-    int (*inherit_flags)(int parent_flags);
+    void (*inherit_options)(int *child_flags, QDict *child_options,
+                            int parent_flags, QDict *parent_options);
 };
 
 extern const BdrvChildRole child_file;
@@ -350,6 +358,7 @@ extern const BdrvChildRole child_format;
 
 struct BdrvChild {
     BlockDriverState *bs;
+    char *name;
     const BdrvChildRole *role;
     QLIST_ENTRY(BdrvChild) next;
     QLIST_ENTRY(BdrvChild) next_parent;
@@ -395,8 +404,6 @@ struct BlockDriverState {
     BdrvChild *backing;
     BdrvChild *file;
 
-    NotifierList close_notifiers;
-
     /* Callback before write request is processed */
     NotifierWithReturnList before_write_notifiers;
 
@@ -435,8 +442,10 @@ struct BlockDriverState {
     char node_name[32];
     /* element of the list of named nodes building the graph */
     QTAILQ_ENTRY(BlockDriverState) node_list;
-    /* element of the list of "drives" the guest sees */
-    QTAILQ_ENTRY(BlockDriverState) device_list;
+    /* element of the list of all BlockDriverStates (all_bdrv_states) */
+    QTAILQ_ENTRY(BlockDriverState) bs_list;
+    /* element of the list of monitor-owned BDS */
+    QTAILQ_ENTRY(BlockDriverState) monitor_list;
     QLIST_HEAD(, BdrvDirtyBitmap) dirty_bitmaps;
     int refcnt;
 
@@ -456,6 +465,7 @@ struct BlockDriverState {
     QLIST_HEAD(, BdrvChild) parents;
 
     QDict *options;
+    QDict *explicit_options;
     BlockdevDetectZeroesOptions detect_zeroes;
 
     /* The error object in use for blocking operations on backing_hd */
@@ -489,8 +499,6 @@ extern BlockDriver bdrv_file;
 extern BlockDriver bdrv_raw;
 extern BlockDriver bdrv_qcow2;
 
-extern QTAILQ_HEAD(BdrvStates, BlockDriverState) bdrv_states;
-
 /**
  * bdrv_setup_io_funcs:
  *
@@ -499,6 +507,13 @@ extern QTAILQ_HEAD(BdrvStates, BlockDriverState) bdrv_states;
  * that fall back to implemented interfaces.
  */
 void bdrv_setup_io_funcs(BlockDriver *bdrv);
+
+int coroutine_fn bdrv_co_do_preadv(BlockDriverState *bs,
+    int64_t offset, unsigned int bytes, QEMUIOVector *qiov,
+    BdrvRequestFlags flags);
+int coroutine_fn bdrv_co_do_pwritev(BlockDriverState *bs,
+    int64_t offset, unsigned int bytes, QEMUIOVector *qiov,
+    BdrvRequestFlags flags);
 
 int get_tmp_filename(char *filename, int size);
 BlockDriver *bdrv_probe_all(const uint8_t *buf, int buf_size,
@@ -682,10 +697,18 @@ void backup_start(BlockDriverState *bs, BlockDriverState *target,
                   BlockCompletionFunc *cb, void *opaque,
                   BlockJobTxn *txn, Error **errp);
 
+void hmp_drive_add_node(Monitor *mon, const char *optstr);
+
+BdrvChild *bdrv_root_attach_child(BlockDriverState *child_bs,
+                                  const char *child_name,
+                                  const BdrvChildRole *child_role);
+void bdrv_root_unref_child(BdrvChild *child);
+
 void blk_set_bs(BlockBackend *blk, BlockDriverState *bs);
 
 void blk_dev_change_media_cb(BlockBackend *blk, bool load);
 bool blk_dev_has_removable_media(BlockBackend *blk);
+bool blk_dev_has_tray(BlockBackend *blk);
 void blk_dev_eject_request(BlockBackend *blk, bool force);
 bool blk_dev_is_tray_open(BlockBackend *blk);
 bool blk_dev_is_medium_locked(BlockBackend *blk);
@@ -696,5 +719,7 @@ bool bdrv_requests_pending(BlockDriverState *bs);
 
 void bdrv_clear_dirty_bitmap(BdrvDirtyBitmap *bitmap, HBitmap **out);
 void bdrv_undo_clear_dirty_bitmap(BdrvDirtyBitmap *bitmap, HBitmap *in);
+
+void blockdev_close_all_bdrv_states(void);
 
 #endif /* BLOCK_INT_H */

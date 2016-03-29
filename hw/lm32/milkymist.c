@@ -17,6 +17,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "hw/hw.h"
 #include "hw/block/flash.h"
@@ -176,7 +177,7 @@ milkymist_init(MachineState *machine)
 
         /* Boots a kernel elf binary.  */
         kernel_size = load_elf(kernel_filename, NULL, NULL, &entry, NULL, NULL,
-                               1, EM_LATTICEMICO32, 0);
+                               1, EM_LATTICEMICO32, 0, 0);
         reset_info->bootstrap_pc = entry;
 
         if (kernel_size < 0) {

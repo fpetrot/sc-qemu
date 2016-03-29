@@ -26,15 +26,6 @@
  * THE SOFTWARE.
  */
 
-/* The following block of code temporarily renames the daemon() function so the
-   compiler does not see the warning associated with it in stdlib.h on OSX */
-#ifdef __APPLE__
-#define daemon qemu_fake_daemon_function
-#include <stdlib.h>
-#undef daemon
-extern int daemon(int, int);
-#endif
-
 #if defined(__linux__) && (defined(__x86_64__) || defined(__arm__))
    /* Use 2 MiB alignment so transparent hugepages can be used by KVM.
       Valgrind does not support alignments larger than 1 MiB,
@@ -46,26 +37,22 @@ extern int daemon(int, int);
 #else
 #  define QEMU_VMALLOC_ALIGN getpagesize()
 #endif
-#define HUGETLBFS_MAGIC       0x958458f6
 
+#include "qemu/osdep.h"
 #include <termios.h>
-#include <unistd.h>
 #include <termios.h>
 
 #include <glib/gprintf.h>
 
-#include "config-host.h"
 #include "sysemu/sysemu.h"
 #include "trace.h"
 #include "qemu/sockets.h"
 #include <sys/mman.h>
 #include <libgen.h>
-#include <setjmp.h>
 #include <sys/signal.h>
 
 #ifdef CONFIG_LINUX
 #include <sys/syscall.h>
-#include <sys/vfs.h>
 #endif
 
 #ifdef __FreeBSD__
@@ -340,26 +327,6 @@ static void sigbus_handler(int signal)
     siglongjmp(sigjump, 1);
 }
 
-static size_t fd_getpagesize(int fd)
-{
-#ifdef CONFIG_LINUX
-    struct statfs fs;
-    int ret;
-
-    if (fd != -1) {
-        do {
-            ret = fstatfs(fd, &fs);
-        } while (ret != 0 && errno == EINTR);
-
-        if (ret == 0 && fs.f_type == HUGETLBFS_MAGIC) {
-            return fs.f_bsize;
-        }
-    }
-#endif
-
-    return getpagesize();
-}
-
 void os_mem_prealloc(int fd, char *area, size_t memory)
 {
     int ret;
@@ -387,7 +354,7 @@ void os_mem_prealloc(int fd, char *area, size_t memory)
         exit(1);
     } else {
         int i;
-        size_t hpagesize = fd_getpagesize(fd);
+        size_t hpagesize = qemu_fd_getpagesize(fd);
         size_t numpages = DIV_ROUND_UP(memory, hpagesize);
 
         /* MAP_POPULATE silently ignores failures */

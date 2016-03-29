@@ -24,6 +24,7 @@
  * This driver attempts to emulate an HPET device in software.
  */
 
+#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/i386/pc.h"
 #include "ui/console.h"
@@ -713,7 +714,7 @@ static void hpet_init(Object *obj)
     HPETState *s = HPET(obj);
 
     /* HPET Area */
-    memory_region_init_io(&s->iomem, obj, &hpet_ram_ops, s, "hpet", 0x400);
+    memory_region_init_io(&s->iomem, obj, &hpet_ram_ops, s, "hpet", HPET_LEN);
     sysbus_init_mmio(sbd, &s->iomem);
 }
 

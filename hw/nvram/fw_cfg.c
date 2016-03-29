@@ -21,6 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/dma.h"
@@ -31,7 +32,6 @@
 #include "qemu/error-report.h"
 #include "qemu/config-file.h"
 
-#define FW_CFG_CTL_SIZE 2
 #define FW_CFG_NAME "fw_cfg"
 #define FW_CFG_PATH "/machine/" FW_CFG_NAME
 
@@ -252,7 +252,8 @@ static void fw_cfg_write(FWCfgState *s, uint8_t value)
 
 static int fw_cfg_select(FWCfgState *s, uint16_t key)
 {
-    int ret;
+    int arch, ret;
+    FWCfgEntry *e;
 
     s->cur_offset = 0;
     if ((key & FW_CFG_ENTRY_MASK) >= FW_CFG_MAX_ENTRY) {
@@ -261,41 +262,45 @@ static int fw_cfg_select(FWCfgState *s, uint16_t key)
     } else {
         s->cur_entry = key;
         ret = 1;
+        /* entry successfully selected, now run callback if present */
+        arch = !!(key & FW_CFG_ARCH_LOCAL);
+        e = &s->entries[arch][key & FW_CFG_ENTRY_MASK];
+        if (e->read_callback) {
+            e->read_callback(e->callback_opaque);
+        }
     }
 
     trace_fw_cfg_select(s, key, ret);
     return ret;
 }
 
-static uint8_t fw_cfg_read(FWCfgState *s)
-{
-    int arch = !!(s->cur_entry & FW_CFG_ARCH_LOCAL);
-    FWCfgEntry *e = &s->entries[arch][s->cur_entry & FW_CFG_ENTRY_MASK];
-    uint8_t ret;
-
-    if (s->cur_entry == FW_CFG_INVALID || !e->data || s->cur_offset >= e->len)
-        ret = 0;
-    else {
-        if (e->read_callback) {
-            e->read_callback(e->callback_opaque, s->cur_offset);
-        }
-        ret = e->data[s->cur_offset++];
-    }
-
-    trace_fw_cfg_read(s, ret);
-    return ret;
-}
-
-static uint64_t fw_cfg_data_mem_read(void *opaque, hwaddr addr,
-                                     unsigned size)
+static uint64_t fw_cfg_data_read(void *opaque, hwaddr addr, unsigned size)
 {
     FWCfgState *s = opaque;
+    int arch = !!(s->cur_entry & FW_CFG_ARCH_LOCAL);
+    FWCfgEntry *e = (s->cur_entry == FW_CFG_INVALID) ? NULL :
+                    &s->entries[arch][s->cur_entry & FW_CFG_ENTRY_MASK];
     uint64_t value = 0;
-    unsigned i;
 
-    for (i = 0; i < size; ++i) {
-        value = (value << 8) | fw_cfg_read(s);
+    assert(size > 0 && size <= sizeof(value));
+    if (s->cur_entry != FW_CFG_INVALID && e->data && s->cur_offset < e->len) {
+        /* The least significant 'size' bytes of the return value are
+         * expected to contain a string preserving portion of the item
+         * data, padded with zeros on the right in case we run out early.
+         * In technical terms, we're composing the host-endian representation
+         * of the big endian interpretation of the fw_cfg string.
+         */
+        do {
+            value = (value << 8) | e->data[s->cur_offset++];
+        } while (--size && s->cur_offset < e->len);
+        /* If size is still not zero, we *did* run out early, so continue
+         * left-shifting, to add the appropriate number of padding zeros
+         * on the right.
+         */
+        value <<= 8 * size;
     }
+
+    trace_fw_cfg_read(s, value);
     return value;
 }
 
@@ -338,7 +343,8 @@ static void fw_cfg_dma_transfer(FWCfgState *s)
     }
 
     arch = !!(s->cur_entry & FW_CFG_ARCH_LOCAL);
-    e = &s->entries[arch][s->cur_entry & FW_CFG_ENTRY_MASK];
+    e = (s->cur_entry == FW_CFG_INVALID) ? NULL :
+        &s->entries[arch][s->cur_entry & FW_CFG_ENTRY_MASK];
 
     if (dma.control & FW_CFG_DMA_CTL_READ) {
         read = 1;
@@ -369,10 +375,6 @@ static void fw_cfg_dma_transfer(FWCfgState *s)
                 len = dma.length;
             } else {
                 len = (e->len - s->cur_offset);
-            }
-
-            if (e->read_callback) {
-                e->read_callback(e->callback_opaque, s->cur_offset);
             }
 
             /* If the access is not a read access, it will be a skip access,
@@ -451,12 +453,6 @@ static bool fw_cfg_ctl_mem_valid(void *opaque, hwaddr addr,
     return is_write && size == 2;
 }
 
-static uint64_t fw_cfg_comb_read(void *opaque, hwaddr addr,
-                                 unsigned size)
-{
-    return fw_cfg_read(opaque);
-}
-
 static void fw_cfg_comb_write(void *opaque, hwaddr addr,
                               uint64_t value, unsigned size)
 {
@@ -483,7 +479,7 @@ static const MemoryRegionOps fw_cfg_ctl_mem_ops = {
 };
 
 static const MemoryRegionOps fw_cfg_data_mem_ops = {
-    .read = fw_cfg_data_mem_read,
+    .read = fw_cfg_data_read,
     .write = fw_cfg_data_mem_write,
     .endianness = DEVICE_BIG_ENDIAN,
     .valid = {
@@ -494,7 +490,7 @@ static const MemoryRegionOps fw_cfg_data_mem_ops = {
 };
 
 static const MemoryRegionOps fw_cfg_comb_mem_ops = {
-    .read = fw_cfg_comb_read,
+    .read = fw_cfg_data_read,
     .write = fw_cfg_comb_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid.accepts = fw_cfg_comb_valid,
@@ -513,7 +509,8 @@ static void fw_cfg_reset(DeviceState *d)
 {
     FWCfgState *s = FW_CFG(d);
 
-    fw_cfg_select(s, 0);
+    /* we never register a read callback for FW_CFG_SIGNATURE */
+    fw_cfg_select(s, FW_CFG_SIGNATURE);
 }
 
 /* Save restore 32 bit int as uint16_t
@@ -780,17 +777,19 @@ FWCfgState *fw_cfg_init_io_dma(uint32_t iobase, uint32_t dma_iobase,
     DeviceState *dev;
     FWCfgState *s;
     uint32_t version = FW_CFG_VERSION;
-    bool dma_enabled = dma_iobase && dma_as;
+    bool dma_requested = dma_iobase && dma_as;
 
     dev = qdev_create(NULL, TYPE_FW_CFG_IO);
     qdev_prop_set_uint32(dev, "iobase", iobase);
     qdev_prop_set_uint32(dev, "dma_iobase", dma_iobase);
-    qdev_prop_set_bit(dev, "dma_enabled", dma_enabled);
+    if (!dma_requested) {
+        qdev_prop_set_bit(dev, "dma_enabled", false);
+    }
 
     fw_cfg_init1(dev);
     s = FW_CFG(dev);
 
-    if (dma_enabled) {
+    if (s->dma_enabled) {
         /* 64 bits for the address field */
         s->dma_as = dma_as;
         s->dma_addr = 0;
@@ -816,11 +815,13 @@ FWCfgState *fw_cfg_init_mem_wide(hwaddr ctl_addr,
     SysBusDevice *sbd;
     FWCfgState *s;
     uint32_t version = FW_CFG_VERSION;
-    bool dma_enabled = dma_addr && dma_as;
+    bool dma_requested = dma_addr && dma_as;
 
     dev = qdev_create(NULL, TYPE_FW_CFG_MEM);
     qdev_prop_set_uint32(dev, "data_width", data_width);
-    qdev_prop_set_bit(dev, "dma_enabled", dma_enabled);
+    if (!dma_requested) {
+        qdev_prop_set_bit(dev, "dma_enabled", false);
+    }
 
     fw_cfg_init1(dev);
 
@@ -830,7 +831,7 @@ FWCfgState *fw_cfg_init_mem_wide(hwaddr ctl_addr,
 
     s = FW_CFG(dev);
 
-    if (dma_enabled) {
+    if (s->dma_enabled) {
         s->dma_as = dma_as;
         s->dma_addr = 0;
         sysbus_mmio_map(sbd, 2, dma_addr);
@@ -875,7 +876,7 @@ static Property fw_cfg_io_properties[] = {
     DEFINE_PROP_UINT32("iobase", FWCfgIoState, iobase, -1),
     DEFINE_PROP_UINT32("dma_iobase", FWCfgIoState, dma_iobase, -1),
     DEFINE_PROP_BOOL("dma_enabled", FWCfgIoState, parent_obj.dma_enabled,
-                     false),
+                     true),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -884,6 +885,9 @@ static void fw_cfg_io_realize(DeviceState *dev, Error **errp)
     FWCfgIoState *s = FW_CFG_IO(dev);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
+    /* when using port i/o, the 8-bit data register ALWAYS overlaps
+     * with half of the 16-bit control register. Hence, the total size
+     * of the i/o region used is FW_CFG_CTL_SIZE */
     memory_region_init_io(&s->comb_iomem, OBJECT(s), &fw_cfg_comb_mem_ops,
                           FW_CFG(s), "fwcfg", FW_CFG_CTL_SIZE);
     sysbus_add_io(sbd, s->iobase, &s->comb_iomem);
@@ -915,7 +919,7 @@ static const TypeInfo fw_cfg_io_info = {
 static Property fw_cfg_mem_properties[] = {
     DEFINE_PROP_UINT32("data_width", FWCfgMemState, data_width, -1),
     DEFINE_PROP_BOOL("dma_enabled", FWCfgMemState, parent_obj.dma_enabled,
-                     false),
+                     true),
     DEFINE_PROP_END_OF_LIST(),
 };
 

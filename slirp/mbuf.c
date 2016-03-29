@@ -15,15 +15,16 @@
  * the flags
  */
 
+#include "qemu/osdep.h"
 #include <slirp.h>
 
 #define MBUF_THRESH 30
 
 /*
  * Find a nice value for msize
- * XXX if_maxlinkhdr already in mtu
  */
-#define SLIRP_MSIZE (IF_MTU + IF_MAXLINKHDR + offsetof(struct mbuf, m_dat) + 6)
+#define SLIRP_MSIZE\
+    (offsetof(struct mbuf, m_dat) + IF_MAXLINKHDR + TCPIPHDR_DELTA + IF_MTU)
 
 void
 m_init(Slirp *slirp)
@@ -91,7 +92,7 @@ m_get(Slirp *slirp)
 	m->m_len = 0;
         m->m_nextpkt = NULL;
         m->m_prevpkt = NULL;
-        m->arp_requested = false;
+        m->resolution_requested = false;
         m->expiration_date = (uint64_t)-1;
 end_error:
 	DEBUG_ARG("m = %p", m);

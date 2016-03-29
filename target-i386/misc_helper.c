@@ -17,6 +17,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/helper-proto.h"
 #include "exec/cpu_ldst.h"
@@ -360,6 +361,12 @@ void helper_wrmsr(CPUX86State *env)
     case MSR_IA32_MISC_ENABLE:
         env->msr_ia32_misc_enable = val;
         break;
+    case MSR_IA32_BNDCFGS:
+        /* FIXME: #GP if reserved bits are set.  */
+        /* FIXME: Extend highest implemented bit of linear address.  */
+        env->msr_bndcfgs = val;
+        cpu_sync_bndcs_hflags(env);
+        break;
     default:
         if ((uint32_t)env->regs[R_ECX] >= MSR_MC0_CTL
             && (uint32_t)env->regs[R_ECX] < MSR_MC0_CTL +
@@ -504,6 +511,9 @@ void helper_rdmsr(CPUX86State *env)
         break;
     case MSR_IA32_MISC_ENABLE:
         val = env->msr_ia32_misc_enable;
+        break;
+    case MSR_IA32_BNDCFGS:
+        val = env->msr_bndcfgs;
         break;
     default:
         if ((uint32_t)env->regs[R_ECX] >= MSR_MC0_CTL

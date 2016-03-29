@@ -15,7 +15,7 @@
  * GNU GPL, version 2 or (at your option) any later version.
  */
 
-#include <inttypes.h>
+#include "qemu/osdep.h"
 
 #include "standard-headers/linux/virtio_pci.h"
 #include "hw/virtio/virtio.h"
@@ -47,6 +47,7 @@
 
 static void virtio_pci_bus_new(VirtioBusState *bus, size_t bus_size,
                                VirtIOPCIProxy *dev);
+static void virtio_pci_reset(DeviceState *qdev);
 
 /* virtio device */
 /* DeviceState to VirtIOPCIProxy. For use off data-path. TODO: use QOM. */
@@ -404,9 +405,7 @@ static void virtio_ioport_write(void *opaque, uint32_t addr, uint32_t val)
     case VIRTIO_PCI_QUEUE_PFN:
         pa = (hwaddr)val << VIRTIO_PCI_QUEUE_ADDR_SHIFT;
         if (pa == 0) {
-            virtio_pci_stop_ioeventfd(proxy);
-            virtio_reset(vdev);
-            msix_unuse_all_vectors(&proxy->pci_dev);
+            virtio_pci_reset(DEVICE(proxy));
         }
         else
             virtio_queue_set_addr(vdev, vdev->queue_sel, pa);
@@ -432,8 +431,7 @@ static void virtio_ioport_write(void *opaque, uint32_t addr, uint32_t val)
         }
 
         if (vdev->status == 0) {
-            virtio_reset(vdev);
-            msix_unuse_all_vectors(&proxy->pci_dev);
+            virtio_pci_reset(DEVICE(proxy));
         }
 
         /* Linux before 2.6.34 drives the device without enabling
@@ -806,7 +804,7 @@ static int kvm_virtio_pci_vector_use(VirtIOPCIProxy *proxy, int nvqs)
         /* If guest supports masking, set up irqfd now.
          * Otherwise, delay until unmasked in the frontend.
          */
-        if (k->guest_notifier_mask) {
+        if (vdev->use_guest_notifier_mask && k->guest_notifier_mask) {
             ret = kvm_virtio_pci_irqfd_use(proxy, queue_no, vector);
             if (ret < 0) {
                 kvm_virtio_pci_vq_vector_release(proxy, vector);
@@ -822,7 +820,7 @@ undo:
         if (vector >= msix_nr_vectors_allocated(dev)) {
             continue;
         }
-        if (k->guest_notifier_mask) {
+        if (vdev->use_guest_notifier_mask && k->guest_notifier_mask) {
             kvm_virtio_pci_irqfd_release(proxy, queue_no, vector);
         }
         kvm_virtio_pci_vq_vector_release(proxy, vector);
@@ -849,7 +847,7 @@ static void kvm_virtio_pci_vector_release(VirtIOPCIProxy *proxy, int nvqs)
         /* If guest supports masking, clean up irqfd now.
          * Otherwise, it was cleaned when masked in the frontend.
          */
-        if (k->guest_notifier_mask) {
+        if (vdev->use_guest_notifier_mask && k->guest_notifier_mask) {
             kvm_virtio_pci_irqfd_release(proxy, queue_no, vector);
         }
         kvm_virtio_pci_vq_vector_release(proxy, vector);
@@ -882,7 +880,7 @@ static int virtio_pci_vq_vector_unmask(VirtIOPCIProxy *proxy,
     /* If guest supports masking, irqfd is already setup, unmask it.
      * Otherwise, set it up now.
      */
-    if (k->guest_notifier_mask) {
+    if (vdev->use_guest_notifier_mask && k->guest_notifier_mask) {
         k->guest_notifier_mask(vdev, queue_no, false);
         /* Test after unmasking to avoid losing events. */
         if (k->guest_notifier_pending &&
@@ -905,7 +903,7 @@ static void virtio_pci_vq_vector_mask(VirtIOPCIProxy *proxy,
     /* If guest supports masking, keep irqfd but mask it.
      * Otherwise, clean it up now.
      */ 
-    if (k->guest_notifier_mask) {
+    if (vdev->use_guest_notifier_mask && k->guest_notifier_mask) {
         k->guest_notifier_mask(vdev, queue_no, true);
     } else {
         kvm_virtio_pci_irqfd_release(proxy, queue_no, vector);
@@ -1022,7 +1020,9 @@ static int virtio_pci_set_guest_notifier(DeviceState *d, int n, bool assign,
         event_notifier_cleanup(notifier);
     }
 
-    if (!msix_enabled(&proxy->pci_dev) && vdc->guest_notifier_mask) {
+    if (!msix_enabled(&proxy->pci_dev) &&
+        vdev->use_guest_notifier_mask &&
+        vdc->guest_notifier_mask) {
         vdc->guest_notifier_mask(vdev, n, !assign);
     }
 
@@ -1351,8 +1351,7 @@ static void virtio_pci_common_write(void *opaque, hwaddr addr,
         }
 
         if (vdev->status == 0) {
-            virtio_reset(vdev);
-            msix_unuse_all_vectors(&proxy->pci_dev);
+            virtio_pci_reset(DEVICE(proxy));
         }
 
         break;
@@ -1814,13 +1813,10 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
 
     address_space_init(&proxy->modern_as, &proxy->modern_cfg, "virtio-pci-cfg-as");
 
-    if (!(proxy->flags & VIRTIO_PCI_FLAG_DISABLE_PCIE)
-        && !(proxy->flags & VIRTIO_PCI_FLAG_DISABLE_MODERN)
-        && pci_bus_is_express(pci_dev->bus)
-        && !pci_bus_is_root(pci_dev->bus)) {
+    if (pci_is_express(pci_dev) && pci_bus_is_express(pci_dev->bus) &&
+        !pci_bus_is_root(pci_dev->bus)) {
         int pos;
 
-        pci_dev->cap_present |= QEMU_PCI_CAP_EXPRESS;
         pos = pcie_endpoint_cap_init(pci_dev, 0);
         assert(pos > 0);
 
@@ -1832,6 +1828,12 @@ static void virtio_pci_realize(PCIDevice *pci_dev, Error **errp)
          * PCI Power Management Interface Specification.
          */
         pci_set_word(pci_dev->config + pos + PCI_PM_PMC, 0x3);
+    } else {
+        /*
+         * make future invocations of pci_is_express() return false
+         * and pci_config_size() return PCI_CONFIG_SPACE_SIZE.
+         */
+        pci_dev->cap_present &= ~QEMU_PCI_CAP_EXPRESS;
     }
 
     virtio_pci_bus_new(&proxy->bus, sizeof(proxy->bus), proxy);
@@ -1879,10 +1881,25 @@ static Property virtio_pci_properties[] = {
     DEFINE_PROP_END_OF_LIST(),
 };
 
+static void virtio_pci_dc_realize(DeviceState *qdev, Error **errp)
+{
+    VirtioPCIClass *vpciklass = VIRTIO_PCI_GET_CLASS(qdev);
+    VirtIOPCIProxy *proxy = VIRTIO_PCI(qdev);
+    PCIDevice *pci_dev = &proxy->pci_dev;
+
+    if (!(proxy->flags & VIRTIO_PCI_FLAG_DISABLE_PCIE) &&
+        !(proxy->flags & VIRTIO_PCI_FLAG_DISABLE_MODERN)) {
+        pci_dev->cap_present |= QEMU_PCI_CAP_EXPRESS;
+    }
+
+    vpciklass->parent_dc_realize(qdev, errp);
+}
+
 static void virtio_pci_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
+    VirtioPCIClass *vpciklass = VIRTIO_PCI_CLASS(klass);
 
     dc->props = virtio_pci_properties;
     k->realize = virtio_pci_realize;
@@ -1890,6 +1907,8 @@ static void virtio_pci_class_init(ObjectClass *klass, void *data)
     k->vendor_id = PCI_VENDOR_ID_REDHAT_QUMRANET;
     k->revision = VIRTIO_PCI_ABI_VERSION;
     k->class_id = PCI_CLASS_OTHERS;
+    vpciklass->parent_dc_realize = dc->realize;
+    dc->realize = virtio_pci_dc_realize;
     dc->reset = virtio_pci_reset;
 }
 

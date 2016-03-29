@@ -31,7 +31,7 @@
    and the small letter tells about the operand size.  Refer to
    the Intel manual for details.  */
 
-#include <stdlib.h>
+#include "qemu/osdep.h"
 #include "disas/bfd.h"
 /* include/opcode/i386.h r1.78 */
 
@@ -152,8 +152,6 @@
 
 /* opcodes/i386-dis.c r1.126 */
 #include "qemu-common.h"
-
-#include <setjmp.h>
 
 static int fetch_data2(struct disassemble_info *, bfd_byte *);
 static int fetch_data(struct disassemble_info *, bfd_byte *);

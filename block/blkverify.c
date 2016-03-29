@@ -7,7 +7,7 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include <stdarg.h>
+#include "qemu/osdep.h"
 #include "qemu/sockets.h" /* for EINPROGRESS on Windows */
 #include "block/block_int.h"
 #include "qapi/qmp/qdict.h"
@@ -307,7 +307,7 @@ static void blkverify_attach_aio_context(BlockDriverState *bs,
     bdrv_attach_aio_context(s->test_file->bs, new_context);
 }
 
-static void blkverify_refresh_filename(BlockDriverState *bs)
+static void blkverify_refresh_filename(BlockDriverState *bs, QDict *options)
 {
     BDRVBlkverifyState *s = bs->opaque;
 

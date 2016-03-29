@@ -6,7 +6,6 @@
 #include "hw/qdev.h"
 #include "exec/memory.h"
 #include "sysemu/dma.h"
-#include "qapi/error.h"
 
 /* PCI includes legacy ISA access.  */
 #include "hw/isa/isa.h"
@@ -93,6 +92,7 @@
 #define PCI_DEVICE_ID_REDHAT_PCIE_HOST   0x0008
 #define PCI_DEVICE_ID_REDHAT_PXB         0x0009
 #define PCI_DEVICE_ID_REDHAT_BRIDGE_SEAT 0x000a
+#define PCI_DEVICE_ID_REDHAT_PXB_PCIE    0x000b
 #define PCI_DEVICE_ID_REDHAT_QXL         0x0100
 
 #define FMT_PCIBUS                      PRIx64

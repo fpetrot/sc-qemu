@@ -29,22 +29,15 @@
 
 #define _FILE_OFFSET_BITS 64
 
-#include <stddef.h>
-#include <assert.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <inttypes.h>
-#include <string.h>
-#include <unistd.h>
-#include <errno.h>
-#include <sys/types.h>
+#include "qemu/osdep.h"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/unistd.h>
 #include <sys/mman.h>
 #include <sys/eventfd.h>
 #include <arpa/inet.h>
+#include <netdb.h>
+#include <qemu/osdep.h>
 
 #include <linux/vhost.h>
 
@@ -111,7 +104,6 @@ dispatcher_add(Dispatcher *dispr, int sock, void *ctx, CallbackFunc cb)
     return 0;
 }
 
-#if 0
 /* dispatcher_remove() is not currently in use but may be useful
  * in the future. */
 static int
@@ -125,9 +117,9 @@ dispatcher_remove(Dispatcher *dispr, int sock)
     }
 
     FD_CLR(sock, &dispr->fdset);
+    DPRINT("Sock %d removed from dispatcher watch.\n", sock);
     return 0;
 }
-#endif
 
 /* timeout in us */
 static int
@@ -154,11 +146,16 @@ dispatcher_wait(Dispatcher *dispr, uint32_t timeout)
     /* Now call callback for every ready socket. */
 
     int sock;
-    for (sock = 0; sock < dispr->max_sock + 1; sock++)
-        if (FD_ISSET(sock, &fdset)) {
+    for (sock = 0; sock < dispr->max_sock + 1; sock++) {
+        /* The callback on a socket can remove other sockets from the
+         * dispatcher, thus we have to check that the socket is
+         * still not removed from dispatcher's list
+         */
+        if (FD_ISSET(sock, &fdset) && FD_ISSET(sock, &dispr->fdset)) {
             Event *e = &dispr->events[sock];
             e->callback(sock, e->ctx);
         }
+    }
 
     return 0;
 }
@@ -180,6 +177,8 @@ typedef struct VubrVirtq {
 
 #define VHOST_MEMORY_MAX_NREGIONS    8
 #define VHOST_USER_F_PROTOCOL_FEATURES 30
+/* v1.0 compliant. */
+#define VIRTIO_F_VERSION_1		32
 
 #define VHOST_LOG_PAGE 4096
 
@@ -288,6 +287,7 @@ typedef struct VubrDev {
     struct sockaddr_in backend_udp_dest;
     int ready;
     uint64_t features;
+    int hdrlen;
 } VubrDev;
 
 static const char *vubr_request_str[] = {
@@ -414,7 +414,7 @@ vubr_message_read(int conn_fd, VhostUserMsg *vmsg)
     if (vmsg->size > sizeof(vmsg->payload)) {
         fprintf(stderr,
                 "Error: too big message request: %d, size: vmsg->size: %u, "
-                "while sizeof(vmsg->payload) = %lu\n",
+                "while sizeof(vmsg->payload) = %zu\n",
                 vmsg->request, vmsg->size, sizeof(vmsg->payload));
         exit(1);
     }
@@ -478,7 +478,8 @@ vubr_backend_udp_recvbuf(VubrDev *dev, uint8_t *buf, size_t buflen)
 static void
 vubr_consume_raw_packet(VubrDev *dev, uint8_t *buf, uint32_t len)
 {
-    int hdrlen = sizeof(struct virtio_net_hdr_v1);
+    int hdrlen = dev->hdrlen;
+    DPRINT("    hdrlen = %d\n", dev->hdrlen);
 
     if (VHOST_USER_BRIDGE_DEBUG) {
         print_buffer(buf, len);
@@ -540,6 +541,7 @@ vubr_post_buffer(VubrDev *dev, VubrVirtq *vq, uint8_t *buf, int32_t len)
     struct vring_avail *avail = vq->avail;
     struct vring_used *used = vq->used;
     uint64_t log_guest_addr = vq->log_guest_addr;
+    int32_t remaining_len = len;
 
     unsigned int size = vq->size;
 
@@ -554,36 +556,49 @@ vubr_post_buffer(VubrDev *dev, VubrVirtq *vq, uint8_t *buf, int32_t len)
     uint16_t d_index = avail->ring[a_index];
 
     int i = d_index;
+    uint32_t written_len = 0;
 
-    DPRINT("Post packet to guest on vq:\n");
-    DPRINT("    size             = %d\n", vq->size);
-    DPRINT("    last_avail_index = %d\n", vq->last_avail_index);
-    DPRINT("    last_used_index  = %d\n", vq->last_used_index);
-    DPRINT("    a_index = %d\n", a_index);
-    DPRINT("    u_index = %d\n", u_index);
-    DPRINT("    d_index = %d\n", d_index);
-    DPRINT("    desc[%d].addr    = 0x%016"PRIx64"\n", i, desc[i].addr);
-    DPRINT("    desc[%d].len     = %d\n", i, desc[i].len);
-    DPRINT("    desc[%d].flags   = %d\n", i, desc[i].flags);
-    DPRINT("    avail->idx = %d\n", avail_index);
-    DPRINT("    used->idx  = %d\n", used->idx);
+    do {
+        DPRINT("Post packet to guest on vq:\n");
+        DPRINT("    size             = %d\n", vq->size);
+        DPRINT("    last_avail_index = %d\n", vq->last_avail_index);
+        DPRINT("    last_used_index  = %d\n", vq->last_used_index);
+        DPRINT("    a_index = %d\n", a_index);
+        DPRINT("    u_index = %d\n", u_index);
+        DPRINT("    d_index = %d\n", d_index);
+        DPRINT("    desc[%d].addr    = 0x%016"PRIx64"\n", i, desc[i].addr);
+        DPRINT("    desc[%d].len     = %d\n", i, desc[i].len);
+        DPRINT("    desc[%d].flags   = %d\n", i, desc[i].flags);
+        DPRINT("    avail->idx = %d\n", avail_index);
+        DPRINT("    used->idx  = %d\n", used->idx);
 
-    if (!(desc[i].flags & VRING_DESC_F_WRITE)) {
-        /* FIXME: we should find writable descriptor. */
-        fprintf(stderr, "Error: descriptor is not writable. Exiting.\n");
-        exit(1);
-    }
+        if (!(desc[i].flags & VRING_DESC_F_WRITE)) {
+            /* FIXME: we should find writable descriptor. */
+            fprintf(stderr, "Error: descriptor is not writable. Exiting.\n");
+            exit(1);
+        }
 
-    void *chunk_start = (void *)gpa_to_va(dev, desc[i].addr);
-    uint32_t chunk_len = desc[i].len;
+        void *chunk_start = (void *)(uintptr_t)gpa_to_va(dev, desc[i].addr);
+        uint32_t chunk_len = desc[i].len;
+        uint32_t chunk_write_len = MIN(remaining_len, chunk_len);
 
-    if (len <= chunk_len) {
-        memcpy(chunk_start, buf, len);
-        vubr_log_write(dev, desc[i].addr, len);
-    } else {
-        fprintf(stderr,
-                "Received too long packet from the backend. Dropping...\n");
-        return;
+        memcpy(chunk_start, buf + written_len, chunk_write_len);
+        vubr_log_write(dev, desc[i].addr, chunk_write_len);
+        remaining_len -= chunk_write_len;
+        written_len += chunk_write_len;
+
+        if ((remaining_len == 0) || !(desc[i].flags & VRING_DESC_F_NEXT)) {
+            break;
+        }
+
+        i = desc[i].next;
+    } while (1);
+
+    if (remaining_len > 0) {
+            fprintf(stderr,
+                    "Too long packet for RX, remaining_len = %d, Dropping...\n",
+                    remaining_len);
+            return;
     }
 
     /* Add descriptor to the used ring. */
@@ -626,7 +641,7 @@ vubr_process_desc(VubrDev *dev, VubrVirtq *vq)
     DPRINT("Chunks: ");
     i = d_index;
     do {
-        void *chunk_start = (void *)gpa_to_va(dev, desc[i].addr);
+        void *chunk_start = (void *)(uintptr_t)gpa_to_va(dev, desc[i].addr);
         uint32_t chunk_len = desc[i].len;
 
         assert(!(desc[i].flags & VRING_DESC_F_WRITE));
@@ -691,7 +706,7 @@ vubr_backend_recv_cb(int sock, void *ctx)
     VubrVirtq *rx_vq = &dev->vq[0];
     uint8_t buf[4096];
     struct virtio_net_hdr_v1 *hdr = (struct virtio_net_hdr_v1 *)buf;
-    int hdrlen = sizeof(struct virtio_net_hdr_v1);
+    int hdrlen = dev->hdrlen;
     int buflen = sizeof(buf);
     int len;
 
@@ -700,6 +715,7 @@ vubr_backend_recv_cb(int sock, void *ctx)
     }
 
     DPRINT("\n\n   ***   IN UDP RECEIVE CALLBACK    ***\n\n");
+    DPRINT("    hdrlen = %d\n", hdrlen);
 
     uint16_t avail_index = atomic_mb_read(&rx_vq->avail->idx);
 
@@ -711,10 +727,12 @@ vubr_backend_recv_cb(int sock, void *ctx)
         return;
     }
 
+    memset(buf, 0, hdrlen);
+    /* TODO: support mergeable buffers. */
+    if (hdrlen == 12)
+        hdr->num_buffers = 1;
     len = vubr_backend_udp_recvbuf(dev, buf + hdrlen, buflen - hdrlen);
 
-    *hdr = (struct virtio_net_hdr_v1) { };
-    hdr->num_buffers = 1;
     vubr_post_buffer(dev, rx_vq, buf, len + hdrlen);
 }
 
@@ -747,6 +765,7 @@ vubr_get_features_exec(VubrDev *dev, VhostUserMsg *vmsg)
     vmsg->payload.u64 =
             ((1ULL << VIRTIO_NET_F_MRG_RXBUF) |
              (1ULL << VHOST_F_LOG_ALL) |
+             (1ULL << VIRTIO_NET_F_GUEST_ANNOUNCE) |
              (1ULL << VHOST_USER_F_PROTOCOL_FEATURES));
 
     vmsg->size = sizeof(vmsg->payload.u64);
@@ -761,7 +780,15 @@ static int
 vubr_set_features_exec(VubrDev *dev, VhostUserMsg *vmsg)
 {
     DPRINT("u64: 0x%016"PRIx64"\n", vmsg->payload.u64);
+
     dev->features = vmsg->payload.u64;
+    if ((dev->features & (1ULL << VIRTIO_F_VERSION_1)) ||
+        (dev->features & (1ULL << VIRTIO_NET_F_MRG_RXBUF))) {
+        dev->hdrlen = 12;
+    } else {
+        dev->hdrlen = 10;
+    }
+
     return 0;
 }
 
@@ -834,9 +861,10 @@ vubr_set_mem_table_exec(VubrDev *dev, VhostUserMsg *vmsg)
         if (mmap_addr == MAP_FAILED) {
             vubr_die("mmap");
         }
-
-        dev_region->mmap_addr = (uint64_t) mmap_addr;
+        dev_region->mmap_addr = (uint64_t)(uintptr_t)mmap_addr;
         DPRINT("    mmap_addr:       0x%016"PRIx64"\n", dev_region->mmap_addr);
+
+        close(vmsg->fds[i]);
     }
 
     return 0;
@@ -907,9 +935,9 @@ vubr_set_vring_addr_exec(VubrDev *dev, VhostUserMsg *vmsg)
     DPRINT("    avail_user_addr:  0x%016llx\n", vra->avail_user_addr);
     DPRINT("    log_guest_addr:   0x%016llx\n", vra->log_guest_addr);
 
-    vq->desc = (struct vring_desc *)qva_to_va(dev, vra->desc_user_addr);
-    vq->used = (struct vring_used *)qva_to_va(dev, vra->used_user_addr);
-    vq->avail = (struct vring_avail *)qva_to_va(dev, vra->avail_user_addr);
+    vq->desc = (struct vring_desc *)(uintptr_t)qva_to_va(dev, vra->desc_user_addr);
+    vq->used = (struct vring_used *)(uintptr_t)qva_to_va(dev, vra->used_user_addr);
+    vq->avail = (struct vring_avail *)(uintptr_t)qva_to_va(dev, vra->avail_user_addr);
     vq->log_guest_addr = vra->log_guest_addr;
 
     DPRINT("Setting virtq addresses:\n");
@@ -947,6 +975,17 @@ vubr_get_vring_base_exec(VubrDev *dev, VhostUserMsg *vmsg)
      * we have to respect * VHOST_USER_SET_VRING_ENABLE request. */
     dev->ready = 0;
 
+    if (dev->vq[index].call_fd != -1) {
+        close(dev->vq[index].call_fd);
+        dispatcher_remove(&dev->dispatcher, dev->vq[index].call_fd);
+        dev->vq[index].call_fd = -1;
+    }
+    if (dev->vq[index].kick_fd != -1) {
+        close(dev->vq[index].kick_fd);
+        dispatcher_remove(&dev->dispatcher, dev->vq[index].kick_fd);
+        dev->vq[index].kick_fd = -1;
+    }
+
     /* Reply */
     return 1;
 }
@@ -962,6 +1001,10 @@ vubr_set_vring_kick_exec(VubrDev *dev, VhostUserMsg *vmsg)
     assert((u64_arg & VHOST_USER_VRING_NOFD_MASK) == 0);
     assert(vmsg->fd_num == 1);
 
+    if (dev->vq[index].kick_fd != -1) {
+        close(dev->vq[index].kick_fd);
+        dispatcher_remove(&dev->dispatcher, dev->vq[index].kick_fd);
+    }
     dev->vq[index].kick_fd = vmsg->fds[0];
     DPRINT("Got kick_fd: %d for vq: %d\n", vmsg->fds[0], index);
 
@@ -996,6 +1039,10 @@ vubr_set_vring_call_exec(VubrDev *dev, VhostUserMsg *vmsg)
     assert((u64_arg & VHOST_USER_VRING_NOFD_MASK) == 0);
     assert(vmsg->fd_num == 1);
 
+    if (dev->vq[index].call_fd != -1) {
+        close(dev->vq[index].call_fd);
+        dispatcher_remove(&dev->dispatcher, dev->vq[index].call_fd);
+    }
     dev->vq[index].call_fd = vmsg->fds[0];
     DPRINT("Got call_fd: %d for vq: %d\n", vmsg->fds[0], index);
 
@@ -1210,32 +1257,61 @@ vubr_new(const char *path)
 }
 
 static void
+vubr_set_host(struct sockaddr_in *saddr, const char *host)
+{
+    if (isdigit(host[0])) {
+        if (!inet_aton(host, &saddr->sin_addr)) {
+            fprintf(stderr, "inet_aton() failed.\n");
+            exit(1);
+        }
+    } else {
+        struct hostent *he = gethostbyname(host);
+
+        if (!he) {
+            fprintf(stderr, "gethostbyname() failed.\n");
+            exit(1);
+        }
+        saddr->sin_addr = *(struct in_addr *)he->h_addr;
+    }
+}
+
+static void
 vubr_backend_udp_setup(VubrDev *dev,
                        const char *local_host,
-                       uint16_t local_port,
-                       const char *dest_host,
-                       uint16_t dest_port)
+                       const char *local_port,
+                       const char *remote_host,
+                       const char *remote_port)
 {
     int sock;
-    struct sockaddr_in si_local = {
-        .sin_family = AF_INET,
-        .sin_port = htons(local_port),
-    };
+    const char *r;
 
-    if (inet_aton(local_host, &si_local.sin_addr) == 0) {
-        fprintf(stderr, "inet_aton() failed.\n");
+    int lport, rport;
+
+    lport = strtol(local_port, (char **)&r, 0);
+    if (r == local_port) {
+        fprintf(stderr, "lport parsing failed.\n");
         exit(1);
     }
+
+    rport = strtol(remote_port, (char **)&r, 0);
+    if (r == remote_port) {
+        fprintf(stderr, "rport parsing failed.\n");
+        exit(1);
+    }
+
+    struct sockaddr_in si_local = {
+        .sin_family = AF_INET,
+        .sin_port = htons(lport),
+    };
+
+    vubr_set_host(&si_local, local_host);
 
     /* setup destination for sends */
     dev->backend_udp_dest = (struct sockaddr_in) {
         .sin_family = AF_INET,
-        .sin_port = htons(dest_port),
+        .sin_port = htons(rport),
     };
-    if (inet_aton(dest_host, &dev->backend_udp_dest.sin_addr) == 0) {
-        fprintf(stderr, "inet_aton() failed.\n");
-        exit(1);
-    }
+    vubr_set_host(&dev->backend_udp_dest, remote_host);
 
     sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock == -1) {
@@ -1249,7 +1325,7 @@ vubr_backend_udp_setup(VubrDev *dev,
     dev->backend_udp_sock = sock;
     dispatcher_add(&dev->dispatcher, sock, dev, vubr_backend_recv_cb);
     DPRINT("Waiting for data from udp backend on %s:%d...\n",
-           local_host, local_port);
+           local_host, lport);
 }
 
 static void
@@ -1262,19 +1338,81 @@ vubr_run(VubrDev *dev)
     }
 }
 
+static int
+vubr_parse_host_port(const char **host, const char **port, const char *buf)
+{
+    char *p = strchr(buf, ':');
+
+    if (!p) {
+        return -1;
+    }
+    *p = '\0';
+    *host = strdup(buf);
+    *port = strdup(p + 1);
+    return 0;
+}
+
+#define DEFAULT_UD_SOCKET "/tmp/vubr.sock"
+#define DEFAULT_LHOST "127.0.0.1"
+#define DEFAULT_LPORT "4444"
+#define DEFAULT_RHOST "127.0.0.1"
+#define DEFAULT_RPORT "5555"
+
+static const char *ud_socket_path = DEFAULT_UD_SOCKET;
+static const char *lhost = DEFAULT_LHOST;
+static const char *lport = DEFAULT_LPORT;
+static const char *rhost = DEFAULT_RHOST;
+static const char *rport = DEFAULT_RPORT;
+
 int
 main(int argc, char *argv[])
 {
     VubrDev *dev;
+    int opt;
 
-    dev = vubr_new("/tmp/vubr.sock");
+    while ((opt = getopt(argc, argv, "l:r:u:")) != -1) {
+
+        switch (opt) {
+        case 'l':
+            if (vubr_parse_host_port(&lhost, &lport, optarg) < 0) {
+                goto out;
+            }
+            break;
+        case 'r':
+            if (vubr_parse_host_port(&rhost, &rport, optarg) < 0) {
+                goto out;
+            }
+            break;
+        case 'u':
+            ud_socket_path = strdup(optarg);
+            break;
+        default:
+            goto out;
+        }
+    }
+
+    DPRINT("ud socket: %s\n", ud_socket_path);
+    DPRINT("local:     %s:%s\n", lhost, lport);
+    DPRINT("remote:    %s:%s\n", rhost, rport);
+
+    dev = vubr_new(ud_socket_path);
     if (!dev) {
         return 1;
     }
 
-    vubr_backend_udp_setup(dev,
-                                 "127.0.0.1", 4444,
-                                 "127.0.0.1", 5555);
+    vubr_backend_udp_setup(dev, lhost, lport, rhost, rport);
     vubr_run(dev);
     return 0;
+
+out:
+    fprintf(stderr, "Usage: %s ", argv[0]);
+    fprintf(stderr, "[-u ud_socket_path] [-l lhost:lport] [-r rhost:rport]\n");
+    fprintf(stderr, "\t-u path to unix doman socket. default: %s\n",
+            DEFAULT_UD_SOCKET);
+    fprintf(stderr, "\t-l local host and port. default: %s:%s\n",
+            DEFAULT_LHOST, DEFAULT_LPORT);
+    fprintf(stderr, "\t-r remote host and port. default: %s:%s\n",
+            DEFAULT_RHOST, DEFAULT_RPORT);
+
+    return 1;
 }

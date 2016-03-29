@@ -16,7 +16,7 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
-#include <stdlib.h>
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "qemu/host-utils.h"
 #include "exec/helper-proto.h"
@@ -569,6 +569,14 @@ static bool mips_vpe_is_wfi(MIPSCPU *c)
     /* If the VPE is halted but otherwise active, it means it's waiting for
        an interrupt.  */
     return cpu->halted && mips_vpe_active(env);
+}
+
+static bool mips_vp_is_wfi(MIPSCPU *c)
+{
+    CPUState *cpu = CPU(c);
+    CPUMIPSState *env = &c->env;
+
+    return cpu->halted && mips_vp_active(env);
 }
 
 static inline void mips_vpe_wake(MIPSCPU *c)
@@ -1840,6 +1848,46 @@ target_ulong helper_yield(CPUMIPSState *env, target_ulong arg)
     return env->CP0_YQMask;
 }
 
+/* R6 Multi-threading */
+#ifndef CONFIG_USER_ONLY
+target_ulong helper_dvp(CPUMIPSState *env)
+{
+    CPUState *other_cs = first_cpu;
+    target_ulong prev = env->CP0_VPControl;
+
+    if (!((env->CP0_VPControl >> CP0VPCtl_DIS) & 1)) {
+        CPU_FOREACH(other_cs) {
+            MIPSCPU *other_cpu = MIPS_CPU(other_cs);
+            /* Turn off all VPs except the one executing the dvp. */
+            if (&other_cpu->env != env) {
+                mips_vpe_sleep(other_cpu);
+            }
+        }
+        env->CP0_VPControl |= (1 << CP0VPCtl_DIS);
+    }
+    return prev;
+}
+
+target_ulong helper_evp(CPUMIPSState *env)
+{
+    CPUState *other_cs = first_cpu;
+    target_ulong prev = env->CP0_VPControl;
+
+    if ((env->CP0_VPControl >> CP0VPCtl_DIS) & 1) {
+        CPU_FOREACH(other_cs) {
+            MIPSCPU *other_cpu = MIPS_CPU(other_cs);
+            if ((&other_cpu->env != env) && !mips_vp_is_wfi(other_cpu)) {
+                /* If the VP is WFI, don't disturb its sleep.
+                 * Otherwise, wake it up. */
+                mips_vpe_wake(other_cpu);
+            }
+        }
+        env->CP0_VPControl &= ~(1 << CP0VPCtl_DIS);
+    }
+    return prev;
+}
+#endif /* !CONFIG_USER_ONLY */
+
 #ifndef CONFIG_USER_ONLY
 /* TLB management */
 static void r4k_mips_tlb_flush_extra (CPUMIPSState *env, int first)
@@ -2545,6 +2593,7 @@ uint64_t helper_float_cvtd_s(CPUMIPSState *env, uint32_t fst0)
     uint64_t fdt2;
 
     fdt2 = float32_to_float64(fst0, &env->active_fpu.fp_status);
+    fdt2 = float64_maybe_silence_nan(fdt2);
     update_fcr31(env, GETPC());
     return fdt2;
 }
@@ -2634,6 +2683,7 @@ uint32_t helper_float_cvts_d(CPUMIPSState *env, uint64_t fdt0)
     uint32_t fst2;
 
     fst2 = float64_to_float32(fdt0, &env->active_fpu.fp_status);
+    fst2 = float32_maybe_silence_nan(fst2);
     update_fcr31(env, GETPC());
     return fst2;
 }

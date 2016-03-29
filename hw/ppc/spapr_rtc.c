@@ -25,6 +25,7 @@
  * THE SOFTWARE.
  *
  */
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "qemu/timer.h"
 #include "sysemu/sysemu.h"
@@ -200,7 +201,6 @@ static const TypeInfo spapr_rtc_info = {
     .name          = TYPE_SPAPR_RTC,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(sPAPRRTCState),
-    .class_size = sizeof(XICSStateClass),
     .class_init    = spapr_rtc_class_init,
 };
 

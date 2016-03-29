@@ -10,16 +10,13 @@
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
  */
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdbool.h>
+#include "qemu/osdep.h"
 #include <glib.h>
 #include <getopt.h>
 #include <glib/gstdio.h>
 #ifndef _WIN32
 #include <syslog.h>
 #include <sys/wait.h>
-#include <sys/stat.h>
 #endif
 #include "qapi/qmp/json-streamer.h"
 #include "qapi/qmp/json-parser.h"
@@ -570,7 +567,7 @@ static void process_command(GAState *s, QDict *req)
 }
 
 /* handle requests/control events coming in over the channel */
-static void process_event(JSONMessageParser *parser, QList *tokens)
+static void process_event(JSONMessageParser *parser, GQueue *tokens)
 {
     GAState *s = container_of(parser, GAState, parser);
     QDict *qdict;
@@ -621,13 +618,7 @@ static gboolean channel_event_cb(GIOCondition condition, gpointer data)
     GAState *s = data;
     gchar buf[QGA_READ_COUNT_DEFAULT+1];
     gsize count;
-    GError *err = NULL;
     GIOStatus status = ga_channel_read(s->channel, buf, QGA_READ_COUNT_DEFAULT, &count);
-    if (err != NULL) {
-        g_warning("error reading channel: %s", err->message);
-        g_error_free(err);
-        return false;
-    }
     switch (status) {
     case G_IO_STATUS_ERROR:
         g_warning("error reading channel");

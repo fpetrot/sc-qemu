@@ -10,6 +10,7 @@
  * See the COPYING.LIB file in the top-level directory.
  */
 
+#include "qemu/osdep.h"
 #include <glib.h>
 #include "block/aio.h"
 #include "qemu/timer.h"
@@ -393,6 +394,7 @@ static void test_aio_external_client(void)
             aio_enable_external(ctx);
         }
         assert(aio_poll(ctx, false));
+        set_event_notifier(ctx, &data.e, NULL);
         event_notifier_cleanup(&data.e);
     }
 }
@@ -831,9 +833,7 @@ int main(int argc, char **argv)
 
     ctx = aio_context_new(&local_error);
     if (!ctx) {
-        error_report("Failed to create AIO Context: '%s'",
-                     error_get_pretty(local_error));
-        error_free(local_error);
+        error_reportf_err(local_error, "Failed to create AIO Context: ");
         exit(1);
     }
     src = aio_get_g_source(ctx);

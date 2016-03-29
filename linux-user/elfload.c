@@ -1,17 +1,9 @@
 /* This is the Linux kernel elf-loading code, ported into user space */
-#include <sys/time.h>
+#include "qemu/osdep.h"
 #include <sys/param.h>
 
-#include <stdio.h>
-#include <sys/types.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <unistd.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
 
 #include "qemu.h"
 #include "disas/disas.h"
@@ -1478,8 +1470,7 @@ static void zero_bss(abi_ulong elf_bss, abi_ulong last_bss, int prot)
 
     host_start = (uintptr_t) g2h(elf_bss);
     host_end = (uintptr_t) g2h(last_bss);
-    host_map_start = (host_start + qemu_real_host_page_size - 1);
-    host_map_start &= -qemu_real_host_page_size;
+    host_map_start = REAL_HOST_PAGE_ALIGN(host_start);
 
     if (host_map_start < host_end) {
         void *p = mmap((void *)host_map_start, host_end - host_map_start,
@@ -1744,7 +1735,7 @@ unsigned long init_guest_space(unsigned long host_start,
         }
     }
 
-    qemu_log("Reserved 0x%lx bytes of guest address space\n", host_size);
+    qemu_log_mask(CPU_LOG_PAGE, "Reserved 0x%lx bytes of guest address space\n", host_size);
 
     return real_start;
 }
@@ -1785,9 +1776,9 @@ static void probe_guest_base(const char *image_name,
         }
         guest_base = real_start - loaddr;
 
-        qemu_log("Relocating guest address space from 0x"
-                 TARGET_ABI_FMT_lx " to 0x%lx\n",
-                 loaddr, real_start);
+        qemu_log_mask(CPU_LOG_PAGE, "Relocating guest address space from 0x"
+                      TARGET_ABI_FMT_lx " to 0x%lx\n",
+                      loaddr, real_start);
     }
     return;
 

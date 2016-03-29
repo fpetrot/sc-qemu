@@ -22,6 +22,7 @@
  * THE SOFTWARE.
  */
 
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/timer.h"
 #include "qemu/sockets.h"	// struct in_addr needed for libslirp.h
@@ -230,7 +231,7 @@ static int os_host_main_loop_wait(int64_t timeout)
     if (!timeout && (spin_counter > MAX_MAIN_LOOP_SPIN)) {
         static bool notified;
 
-        if (!notified && !qtest_enabled()) {
+        if (!notified && !qtest_driver()) {
             fprintf(stderr,
                     "main-loop: WARNING: I/O thread spun for %d iterations\n",
                     MAX_MAIN_LOOP_SPIN);
@@ -508,7 +509,7 @@ int main_loop_wait(int nonblocking)
 
     /* CPU thread can infinitely wait for event after
        missing the warp */
-    qemu_clock_warp(QEMU_CLOCK_VIRTUAL);
+    qemu_start_warp_timer();
     qemu_clock_run_all_timers();
 
     return ret;

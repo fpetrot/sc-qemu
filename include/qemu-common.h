@@ -12,7 +12,6 @@
 #ifndef QEMU_COMMON_H
 #define QEMU_COMMON_H
 
-#include "qemu/osdep.h"
 #include "qemu/typedefs.h"
 #include "qemu/fprintf-fn.h"
 
@@ -22,7 +21,6 @@
 
 #define TFR(expr) do { if ((expr) != -1) break; } while (errno == EINTR)
 
-#include "glib-compat.h"
 #include "qemu/option.h"
 #include "qemu/host-utils.h"
 
@@ -331,12 +329,6 @@ bool tcg_enabled(void);
 
 void cpu_exec_init_all(void);
 
-/* CPU save/load.  */
-#ifdef CPU_SAVE_VERSION
-void cpu_save(QEMUFile *f, void *opaque);
-int cpu_load(QEMUFile *f, void *opaque, int version_id);
-#endif
-
 /* Unblock cpu */
 void qemu_cpu_kick_self(void);
 
@@ -484,13 +476,7 @@ void qemu_hexdump(const char *buf, FILE *fp, const char *prefix, size_t size);
 #endif
 
 #define BUFFER_FIND_NONZERO_OFFSET_UNROLL_FACTOR 8
-static inline bool
-can_use_buffer_find_nonzero_offset(const void *buf, size_t len)
-{
-    return (len % (BUFFER_FIND_NONZERO_OFFSET_UNROLL_FACTOR
-                   * sizeof(VECTYPE)) == 0
-            && ((uintptr_t) buf) % sizeof(VECTYPE) == 0);
-}
+bool can_use_buffer_find_nonzero_offset(const void *buf, size_t len);
 size_t buffer_find_nonzero_offset(const void *buf, size_t len);
 
 /*
@@ -500,5 +486,9 @@ int parse_debug_env(const char *name, int max, int initial);
 
 const char *qemu_ether_ntoa(const MACAddr *mac);
 void page_size_init(void);
+
+/* returns non-zero if dump is in progress, otherwise zero is
+ * returned. */
+bool dump_in_progress(void);
 
 #endif
