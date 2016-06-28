@@ -101,7 +101,7 @@ static void sc_qemu_map_io(qemu_context *ctx, uint32_t base_address,
 }
 
 static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
-                            uint32_t size, void* data)
+                            uint32_t size, void* data, bool readonly)
 {
     MemoryRegion *sysmem = get_system_memory();
     MemoryRegion *dmi = g_new(MemoryRegion, 1);
@@ -112,6 +112,7 @@ static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
     dmi_count++;
 
     memory_region_init_ram_ptr(dmi, NULL, name, size, data);
+    memory_region_set_readonly(dmi, readonly);
     vmstate_register_ram_global(dmi);
     memory_region_add_subregion(sysmem, base_address, dmi);
 }
