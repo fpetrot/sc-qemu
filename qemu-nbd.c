@@ -17,7 +17,9 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "qemu-common.h"
+#include "qemu/cutils.h"
 #include "sysemu/block-backend.h"
 #include "block/block_int.h"
 #include "block/nbd.h"
@@ -29,6 +31,7 @@
 #include "qapi/qmp/qstring.h"
 #include "qom/object_interfaces.h"
 #include "io/channel-socket.h"
+#include "crypto/init.h"
 
 #include <getopt.h>
 #include <libgen.h>
@@ -73,6 +76,7 @@ static void usage(const char *name)
 "  -e, --shared=NUM          device can be shared by NUM clients (default '1')\n"
 "  -t, --persistent          don't exit on the last connection\n"
 "  -v, --verbose             display extra debugging information\n"
+"  -x, --export-name=NAME    expose export by name\n"
 "\n"
 "Exposing part of the image:\n"
 "  -o, --offset=OFFSET       offset into the image\n"
@@ -211,7 +215,7 @@ static int find_partition(BlockBackend *blk, int partition,
 
 static void termsig_handler(int signum)
 {
-    state = TERMINATE;
+    atomic_cmpxchg(&state, RUNNING, TERMINATE);
     qemu_notify_event();
 }
 
@@ -507,6 +511,7 @@ int main(int argc, char **argv)
     const char *export_name = NULL;
     const char *tlscredsid = NULL;
     bool imageOpts = false;
+    bool writethrough = true;
 
     /* The client thread uses SIGTERM to interrupt the server.  A signal
      * handler ensures that "qemu-nbd -v -c" exits with a nice status code.
@@ -515,6 +520,12 @@ int main(int argc, char **argv)
     memset(&sa_sigterm, 0, sizeof(sa_sigterm));
     sa_sigterm.sa_handler = termsig_handler;
     sigaction(SIGTERM, &sa_sigterm, NULL);
+
+    if (qcrypto_init(&local_err) < 0) {
+        error_reportf_err(local_err, "cannot initialize crypto: ");
+        exit(1);
+    }
+
     module_call_init(MODULE_INIT_QOM);
     qemu_add_opts(&qemu_object_opts);
     qemu_init_exec_dir(argv[0]);
@@ -533,7 +544,7 @@ int main(int argc, char **argv)
                 exit(EXIT_FAILURE);
             }
             seen_cache = true;
-            if (bdrv_parse_cache_flags(optarg, &flags) == -1) {
+            if (bdrv_parse_cache_mode(optarg, &flags, &writethrough) == -1) {
                 error_report("Invalid cache mode `%s'", optarg);
                 exit(EXIT_FAILURE);
             }
@@ -700,8 +711,7 @@ int main(int argc, char **argv)
 
     if (qemu_opts_foreach(&qemu_object_opts,
                           user_creatable_add_opts_foreach,
-                          NULL, &local_err)) {
-        error_report_err(local_err);
+                          NULL, NULL)) {
         exit(EXIT_FAILURE);
     }
 
@@ -846,6 +856,8 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
     bs = blk_bs(blk);
+
+    blk_set_enable_write_cache(blk, !writethrough);
 
     if (sn_opts) {
         ret = bdrv_snapshot_load_tmp(bs,

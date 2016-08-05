@@ -83,7 +83,9 @@ check-unit-y += tests/test-crypto-cipher$(EXESUF)
 check-unit-y += tests/test-crypto-secret$(EXESUF)
 check-unit-$(CONFIG_GNUTLS) += tests/test-crypto-tlscredsx509$(EXESUF)
 check-unit-$(CONFIG_GNUTLS) += tests/test-crypto-tlssession$(EXESUF)
+ifneq (,$(findstring qemu-ga,$(TOOLS)))
 check-unit-$(CONFIG_LINUX) += tests/test-qga$(EXESUF)
+endif
 check-unit-y += tests/test-timed-average$(EXESUF)
 check-unit-y += tests/test-io-task$(EXESUF)
 check-unit-y += tests/test-io-channel-socket$(EXESUF)
@@ -92,11 +94,13 @@ check-unit-$(CONFIG_GNUTLS) += tests/test-io-channel-tls$(EXESUF)
 check-unit-y += tests/test-io-channel-command$(EXESUF)
 check-unit-y += tests/test-io-channel-buffer$(EXESUF)
 check-unit-y += tests/test-base64$(EXESUF)
-check-unit-$(if $(CONFIG_NETTLE),y,$(CONFIG_GCRYPT_KDF)) += tests/test-crypto-pbkdf$(EXESUF)
+check-unit-$(if $(CONFIG_NETTLE_KDF),y,$(CONFIG_GCRYPT_KDF)) += tests/test-crypto-pbkdf$(EXESUF)
 check-unit-y += tests/test-crypto-ivgen$(EXESUF)
 check-unit-y += tests/test-crypto-afsplit$(EXESUF)
 check-unit-y += tests/test-crypto-xts$(EXESUF)
 check-unit-y += tests/test-crypto-block$(EXESUF)
+gcov-files-test-logging-y = tests/test-logging.c
+check-unit-y += tests/test-logging$(EXESUF)
 
 check-block-$(CONFIG_POSIX) += tests/qemu-iotests-quick.sh
 
@@ -218,6 +222,8 @@ ifeq ($(CONFIG_VHOST_NET_TEST_i386),)
 check-qtest-x86_64-$(CONFIG_VHOST_NET_TEST_x86_64) += tests/vhost-user-test$(EXESUF)
 endif
 check-qtest-i386-y += tests/test-netfilter$(EXESUF)
+check-qtest-i386-y += tests/test-filter-mirror$(EXESUF)
+check-qtest-i386-y += tests/test-filter-redirector$(EXESUF)
 check-qtest-x86_64-y = $(check-qtest-i386-y)
 gcov-files-i386-y += i386-softmmu/hw/timer/mc146818rtc.c
 gcov-files-x86_64-y = $(subst i386-softmmu/,x86_64-softmmu/,$(gcov-files-i386-y))
@@ -436,6 +442,8 @@ tests/test-timed-average$(EXESUF): tests/test-timed-average.o qemu-timer.o \
 tests/test-base64$(EXESUF): tests/test-base64.o \
 	libqemuutil.a libqemustub.a
 
+tests/test-logging$(EXESUF): tests/test-logging.o $(test-util-obj-y)
+
 tests/test-qapi-types.c tests/test-qapi-types.h :\
 $(SRC_PATH)/tests/qapi-schema/qapi-schema-test.json $(SRC_PATH)/scripts/qapi-types.py $(qapi-py)
 	$(call quiet-command,$(PYTHON) $(SRC_PATH)/scripts/qapi-types.py \
@@ -576,6 +584,8 @@ tests/qemu-iotests/socket_scm_helper$(EXESUF): tests/qemu-iotests/socket_scm_hel
 tests/test-qemu-opts$(EXESUF): tests/test-qemu-opts.o $(test-util-obj-y)
 tests/test-write-threshold$(EXESUF): tests/test-write-threshold.o $(test-block-obj-y)
 tests/test-netfilter$(EXESUF): tests/test-netfilter.o $(qtest-obj-y)
+tests/test-filter-mirror$(EXESUF): tests/test-filter-mirror.o $(qtest-obj-y)
+tests/test-filter-redirector$(EXESUF): tests/test-filter-redirector.o $(qtest-obj-y)
 tests/ivshmem-test$(EXESUF): tests/ivshmem-test.o contrib/ivshmem-server/ivshmem-server.o $(libqos-pc-obj-y)
 tests/vhost-user-bridge$(EXESUF): tests/vhost-user-bridge.o
 

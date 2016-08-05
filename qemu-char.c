@@ -23,6 +23,7 @@
  */
 #include "qemu/osdep.h"
 #include "qemu-common.h"
+#include "qemu/cutils.h"
 #include "monitor/monitor.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/block-backend.h"
@@ -224,12 +225,12 @@ static void qemu_chr_fe_write_log(CharDriverState *s,
     }
 
     while (done < len) {
-        do {
-            ret = write(s->logfd, buf + done, len - done);
-            if (ret == -1 && errno == EAGAIN) {
-                g_usleep(100);
-            }
-        } while (ret == -1 && errno == EAGAIN);
+    retry:
+        ret = write(s->logfd, buf + done, len - done);
+        if (ret == -1 && errno == EAGAIN) {
+            g_usleep(100);
+            goto retry;
+        }
 
         if (ret <= 0) {
             return;
@@ -245,12 +246,12 @@ static int qemu_chr_fe_write_buffer(CharDriverState *s, const uint8_t *buf, int 
 
     qemu_mutex_lock(&s->chr_write_lock);
     while (*offset < len) {
-        do {
-            res = s->chr_write(s, buf + *offset, len - *offset);
-            if (res == -1 && errno == EAGAIN) {
-                g_usleep(100);
-            }
-        } while (res == -1 && errno == EAGAIN);
+    retry:
+        res = s->chr_write(s, buf + *offset, len - *offset);
+        if (res < 0 && errno == EAGAIN) {
+            g_usleep(100);
+            goto retry;
+        }
 
         if (res <= 0) {
             break;
@@ -332,12 +333,12 @@ int qemu_chr_fe_read_all(CharDriverState *s, uint8_t *buf, int len)
     }
 
     while (offset < len) {
-        do {
-            res = s->chr_sync_read(s, buf + offset, len - offset);
-            if (res == -1 && errno == EAGAIN) {
-                g_usleep(100);
-            }
-        } while (res == -1 && errno == EAGAIN);
+    retry:
+        res = s->chr_sync_read(s, buf + offset, len - offset);
+        if (res == -1 && errno == EAGAIN) {
+            g_usleep(100);
+            goto retry;
+        }
 
         if (res == 0) {
             break;
@@ -2798,6 +2799,13 @@ static ssize_t tcp_chr_recv(CharDriverState *chr, char *buf, size_t len)
                                      NULL);
     }
 
+    if (ret == QIO_CHANNEL_ERR_BLOCK) {
+        errno = EAGAIN;
+        ret = -1;
+    } else if (ret == -1) {
+        errno = EIO;
+    }
+
     if (msgfds_num) {
         /* close and clean read_msgfds */
         for (i = 0; i < s->read_msgfds_num; i++) {
@@ -3073,6 +3081,8 @@ static int tcp_chr_new_client(CharDriverState *chr, QIOChannelSocket *sioc)
     s->sioc = sioc;
     object_ref(OBJECT(sioc));
 
+    qio_channel_set_blocking(s->ioc, false, NULL);
+
     if (s->do_nodelay) {
         qio_channel_set_delay(s->ioc, false);
     }
@@ -3104,7 +3114,6 @@ static int tcp_chr_add_client(CharDriverState *chr, int fd)
     if (!sioc) {
         return -1;
     }
-    qio_channel_set_blocking(QIO_CHANNEL(sioc), false, NULL);
     ret = tcp_chr_new_client(chr, sioc);
     object_unref(OBJECT(sioc));
     return ret;

@@ -82,6 +82,7 @@ void free(void *ptr);
    have different prototypes. */
 #define insque slirp_insque
 #define remque slirp_remque
+#define quehead slirp_quehead
 
 #ifdef HAVE_SYS_STROPTS_H
 #include <sys/stropts.h>
@@ -179,6 +180,8 @@ struct Slirp {
     u_int last_slowtimo;
     bool do_slowtimo;
 
+    bool in_enabled, in6_enabled;
+
     /* virtual network configuration */
     struct in_addr vnetwork_addr;
     struct in_addr vnetwork_mask;
@@ -197,12 +200,13 @@ struct Slirp {
     struct ex_list *exec_list;
 
     /* mbuf states */
-    struct mbuf m_freelist, m_usedlist;
+    struct quehead m_freelist;
+    struct quehead m_usedlist;
     int mbuf_alloced;
 
     /* if states */
-    struct mbuf if_fastq;   /* fast queue (for interactive data) */
-    struct mbuf if_batchq;  /* queue for non-interactive data */
+    struct quehead if_fastq;   /* fast queue (for interactive data) */
+    struct quehead if_batchq;  /* queue for non-interactive data */
     struct mbuf *next_m;    /* pointer to next mbuf to output */
     bool if_start_busy;     /* avoid if_start recursion */
 
@@ -341,11 +345,6 @@ struct tcpcb *tcp_drop(struct tcpcb *tp, int err);
 #ifndef _WIN32
 #define min(x,y) ((x) < (y) ? (x) : (y))
 #define max(x,y) ((x) > (y) ? (x) : (y))
-#endif
-
-#ifdef _WIN32
-#undef errno
-#define errno (WSAGetLastError())
 #endif
 
 #endif

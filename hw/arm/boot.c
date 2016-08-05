@@ -8,6 +8,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "hw/hw.h"
 #include "hw/arm/arm.h"
 #include "hw/arm/linux-boot-if.h"
@@ -67,7 +68,7 @@ static const ARMInsnFixup bootloader_aarch64[] = {
  */
 
 static const ARMInsnFixup bootloader[] = {
-    { 0xe28fe008 }, /* add     lr, pc, #8 */
+    { 0xe28fe004 }, /* add     lr, pc, #4 */
     { 0xe51ff004 }, /* ldr     pc, [pc, #-4] */
     { 0, FIXUP_BOARD_SETUP },
 #define BOOTLOADER_NO_BOARD_SETUP_OFFSET 3

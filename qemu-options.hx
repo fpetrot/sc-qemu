@@ -1551,9 +1551,10 @@ DEF("smb", HAS_ARG, QEMU_OPTION_smb, "", QEMU_ARCH_ALL)
 
 DEF("netdev", HAS_ARG, QEMU_OPTION_netdev,
 #ifdef CONFIG_SLIRP
-    "-netdev user,id=str[,net=addr[/mask]][,host=addr][,ip6-net=addr[/int]]\n"
-    "         [,ip6-host=addr][,restrict=on|off][,hostname=host][,dhcpstart=addr]\n"
-    "         [,dns=addr][,ip6-dns=addr][,dnssearch=domain][,tftp=dir]\n"
+    "-netdev user,id=str[,ipv4[=on|off]][,net=addr[/mask]][,host=addr]\n"
+    "         [,ipv6[=on|off]][,ipv6-net=addr[/int]][,ipv6-host=addr]\n"
+    "         [,restrict=on|off][,hostname=host][,dhcpstart=addr]\n"
+    "         [,dns=addr][,ipv6-dns=addr][,dnssearch=domain][,tftp=dir]\n"
     "         [,bootfile=f][,hostfwd=rule][,guestfwd=rule]"
 #ifndef _WIN32
                                              "[,smb=dir[,smbserver=addr]]\n"
@@ -1701,6 +1702,9 @@ Connect user mode stack to VLAN @var{n} (@var{n} = 0 is the default).
 @itemx name=@var{name}
 Assign symbolic name for use in monitor commands.
 
+@option{ipv4} and @option{ipv6} specify that either IPv4 or IPv6 must
+be enabled.  If neither is specified both protocols are enabled.
+
 @item net=@var{addr}[/@var{mask}]
 Set IP network address the guest will see. Optionally specify the netmask,
 either in the form a.b.c.d or as number of valid top-most bits. Default is
@@ -1710,11 +1714,13 @@ either in the form a.b.c.d or as number of valid top-most bits. Default is
 Specify the guest-visible address of the host. Default is the 2nd IP in the
 guest network, i.e. x.x.x.2.
 
-@item ip6-net=@var{addr}[/@var{int}]
-Set IPv6 network address the guest will see. Optionally specify the prefix
-size, as number of valid top-most bits. Default is fec0::/64.
+@item ipv6-net=@var{addr}[/@var{int}]
+Set IPv6 network address the guest will see (default is fec0::/64). The
+network prefix is given in the usual hexadecimal IPv6 address
+notation. The prefix size is optional, and is given as the number of
+valid top-most bits (default is 64).
 
-@item ip6-host=@var{addr}
+@item ipv6-host=@var{addr}
 Specify the guest-visible IPv6 address of the host. Default is the 2nd IPv6 in
 the guest network, i.e. xxxx::2.
 
@@ -1735,7 +1741,7 @@ Specify the guest-visible address of the virtual nameserver. The address must
 be different from the host address. Default is the 3rd IP in the guest network,
 i.e. x.x.x.3.
 
-@item ip6-dns=@var{addr}
+@item ipv6-dns=@var{addr}
 Specify the guest-visible address of the IPv6 virtual nameserver. The address
 must be different from the host address. Default is the 3rd IP in the guest
 network, i.e. xxxx::3.
@@ -2858,18 +2864,32 @@ ETEXI
 
 DEF("fw_cfg", HAS_ARG, QEMU_OPTION_fwcfg,
     "-fw_cfg [name=]<name>,file=<file>\n"
-    "                add named fw_cfg entry from file\n"
+    "                add named fw_cfg entry with contents from file\n"
     "-fw_cfg [name=]<name>,string=<str>\n"
-    "                add named fw_cfg entry from string\n",
+    "                add named fw_cfg entry with contents from string\n",
     QEMU_ARCH_ALL)
 STEXI
+
 @item -fw_cfg [name=]@var{name},file=@var{file}
 @findex -fw_cfg
-Add named fw_cfg entry from file. @var{name} determines the name of
-the entry in the fw_cfg file directory exposed to the guest.
+Add named fw_cfg entry with contents from file @var{file}.
 
 @item -fw_cfg [name=]@var{name},string=@var{str}
-Add named fw_cfg entry from string.
+Add named fw_cfg entry with contents from string @var{str}.
+
+The terminating NUL character of the contents of @var{str} will not be
+included as part of the fw_cfg item data. To insert contents with
+embedded NUL characters, you have to use the @var{file} parameter.
+
+The fw_cfg entries are passed by QEMU through to the guest.
+
+Example:
+@example
+    -fw_cfg name=opt/com.mycompany/blob,file=./my_blob.bin
+@end example
+creates an fw_cfg entry named opt/com.mycompany/blob with contents
+from ./my_blob.bin.
+
 ETEXI
 
 DEF("serial", HAS_ARG, QEMU_OPTION_serial, \
@@ -3152,6 +3172,24 @@ STEXI
 @item -D @var{logfile}
 @findex -D
 Output log in @var{logfile} instead of to stderr
+ETEXI
+
+DEF("dfilter", HAS_ARG, QEMU_OPTION_DFILTER, \
+    "-dfilter range,..  filter debug output to range of addresses (useful for -d cpu,exec,etc..)\n",
+    QEMU_ARCH_ALL)
+STEXI
+@item -dfilter @var{range1}[,...]
+@findex -dfilter
+Filter debug output to that relevant to a range of target addresses. The filter
+spec can be either @var{start}+@var{size}, @var{start}-@var{size} or
+@var{start}..@var{end} where @var{start} @var{end} and @var{size} are the
+addresses and sizes required. For example:
+@example
+    -dfilter 0x8000..0x8fff,0xffffffc000080000+0x200,0xffffffc000060000-0x1000
+@end example
+Will dump output for any code in the 0x1000 sized block starting at 0x8000 and
+the 0x200 sized block starting at 0xffffffc000080000 and another 0x1000 sized
+block starting at 0xffffffc00005f000.
 ETEXI
 
 DEF("L", HAS_ARG, QEMU_OPTION_L, \
@@ -3821,6 +3859,20 @@ queue @var{all|rx|tx} is an option that can be applied to any netfilter.
 @option{tx}: the filter is attached to the transmit queue of the netdev,
              where it will receive packets sent by the netdev.
 
+@item -object filter-mirror,id=@var{id},netdev=@var{netdevid},outdev=@var{chardevid}[,queue=@var{all|rx|tx}]
+
+filter-mirror on netdev @var{netdevid},mirror net packet to chardev
+@var{chardevid}
+
+@item -object filter-redirector,id=@var{id},netdev=@var{netdevid},indev=@var{chardevid},
+outdev=@var{chardevid}[,queue=@var{all|rx|tx}]
+
+filter-redirector on netdev @var{netdevid},redirect filter's net packet to chardev
+@var{chardevid},and redirect indev's packet to filter.
+Create a filter-redirector we need to differ outdev id from indev id, id can not
+be the same. we can just use indev or outdev, but at least one of indev or outdev
+need to be specified.
+
 @item -object filter-dump,id=@var{id},netdev=@var{dev},file=@var{filename}][,maxlen=@var{len}]
 
 Dump the network traffic on netdev @var{dev} to the file specified by
@@ -3850,7 +3902,7 @@ parameter provides the ID of a previously defined secret that contains
 the AES-256 decryption key. This key should be 32-bytes long and be
 base64 encoded. The @var{iv} parameter provides the random initialization
 vector used for encryption of this particular secret and should be a
-base64 encrypted string of the 32-byte IV.
+base64 encrypted string of the 16-byte IV.
 
 The simplest (insecure) usage is to provide the secret inline
 

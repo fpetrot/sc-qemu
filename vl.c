@@ -22,7 +22,8 @@
  * THE SOFTWARE.
  */
 #include "qemu/osdep.h"
-
+#include "qemu/cutils.h"
+#include "qemu/help_option.h"
 
 #ifdef CONFIG_SECCOMP
 #include "sysemu/seccomp.h"
@@ -1746,6 +1747,8 @@ void qemu_system_reset(bool report)
 
     mc = current_machine ? MACHINE_GET_CLASS(current_machine) : NULL;
 
+    cpu_synchronize_all_states();
+
     if (mc && mc->reset) {
         mc->reset();
     } else {
@@ -1894,7 +1897,6 @@ bool main_loop_should_exit(void)
     }
     if (qemu_reset_requested()) {
         pause_all_vcpus();
-        cpu_synchronize_all_states();
         qemu_system_reset(VMRESET_REPORT);
         resume_all_vcpus();
         if (!runstate_check(RUN_STATE_RUNNING) &&
@@ -1904,7 +1906,6 @@ bool main_loop_should_exit(void)
     }
     if (qemu_wakeup_requested()) {
         pause_all_vcpus();
-        cpu_synchronize_all_states();
         qemu_system_reset(VMRESET_SILENT);
         notifier_list_notify(&wakeup_notifiers, &wakeup_reason);
         wakeup_reason = QEMU_WAKEUP_REASON_NONE;
@@ -2298,8 +2299,9 @@ static int parse_fw_cfg(void *opaque, QemuOpts *opts, Error **errp)
     gchar *buf;
     size_t size;
     const char *name, *file, *str;
+    FWCfgState *fw_cfg = (FWCfgState *) opaque;
 
-    if (opaque == NULL) {
+    if (fw_cfg == NULL) {
         error_report("fw_cfg device not available");
         return -1;
     }
@@ -2333,7 +2335,10 @@ static int parse_fw_cfg(void *opaque, QemuOpts *opts, Error **errp)
             return -1;
         }
     }
-    fw_cfg_add_file((FWCfgState *)opaque, name, buf, size);
+    /* For legacy, keep user files in a specific global order. */
+    fw_cfg_set_order_override(fw_cfg, FW_CFG_ORDER_OVERRIDE_USER);
+    fw_cfg_add_file(fw_cfg, name, buf, size);
+    fw_cfg_reset_order_override(fw_cfg);
     return 0;
 }
 
@@ -2842,7 +2847,9 @@ static bool object_create_initial(const char *type)
      * they depend on netdevs already existing
      */
     if (g_str_equal(type, "filter-buffer") ||
-        g_str_equal(type, "filter-dump")) {
+        g_str_equal(type, "filter-dump") ||
+        g_str_equal(type, "filter-mirror") ||
+        g_str_equal(type, "filter-redirector")) {
         return false;
     }
 
@@ -3360,6 +3367,9 @@ int main(int argc, char **argv, char **envp)
                 break;
             case QEMU_OPTION_D:
                 log_file = optarg;
+                break;
+            case QEMU_OPTION_DFILTER:
+                qemu_set_dfilter_ranges(optarg);
                 break;
             case QEMU_OPTION_s:
                 add_device_config(DEV_GDB, "tcp::" DEFAULT_GDBSTUB_PORT);
@@ -4288,8 +4298,7 @@ int main(int argc, char **argv, char **envp)
 
     if (qemu_opts_foreach(qemu_find_opts("object"),
                           user_creatable_add_opts_foreach,
-                          object_create_initial, &err)) {
-        error_report_err(err);
+                          object_create_initial, NULL)) {
         exit(1);
     }
 
@@ -4407,8 +4416,7 @@ int main(int argc, char **argv, char **envp)
 
     if (qemu_opts_foreach(qemu_find_opts("object"),
                           user_creatable_add_opts_foreach,
-                          object_create_delayed, &err)) {
-        error_report_err(err);
+                          object_create_delayed, NULL)) {
         exit(1);
     }
 
@@ -4536,10 +4544,12 @@ int main(int argc, char **argv, char **envp)
     igd_gfx_passthru();
 
     /* init generic devices */
+    rom_set_order_override(FW_CFG_ORDER_OVERRIDE_DEVICE);
     if (qemu_opts_foreach(qemu_find_opts("device"),
                           device_init_func, NULL, NULL)) {
         exit(1);
     }
+    rom_reset_order_override();
 
     /* Did we create any drives that we failed to create a device for? */
     drive_check_orphaned();

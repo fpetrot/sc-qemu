@@ -17,6 +17,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "nbd-internal.h"
 
 static int system_errno_to_nbd_errno(int err)
@@ -25,6 +26,7 @@ static int system_errno_to_nbd_errno(int err)
     case 0:
         return NBD_SUCCESS;
     case EPERM:
+    case EROFS:
         return NBD_EPERM;
     case EIO:
         return NBD_EIO;
@@ -447,11 +449,19 @@ static int nbd_negotiate_options(NBDClient *client)
                 client->ioc = QIO_CHANNEL(tioc);
                 break;
 
+            case NBD_OPT_EXPORT_NAME:
+                /* No way to return an error to client, so drop connection */
+                TRACE("Option 0x%x not permitted before TLS", clientflags);
+                return -EINVAL;
+
             default:
                 TRACE("Option 0x%x not permitted before TLS", clientflags);
+                if (nbd_negotiate_drop_sync(client->ioc, length) != length) {
+                    return -EIO;
+                }
                 nbd_negotiate_send_rep(client->ioc, NBD_REP_ERR_TLS_REQD,
                                        clientflags);
-                return -EINVAL;
+                break;
             }
         } else if (fixedNewstyle) {
             switch (clientflags) {
@@ -469,6 +479,9 @@ static int nbd_negotiate_options(NBDClient *client)
                 return nbd_negotiate_handle_export_name(client, length);
 
             case NBD_OPT_STARTTLS:
+                if (nbd_negotiate_drop_sync(client->ioc, length) != length) {
+                    return -EIO;
+                }
                 if (client->tlscreds) {
                     TRACE("TLS already enabled");
                     nbd_negotiate_send_rep(client->ioc, NBD_REP_ERR_INVALID,
@@ -478,12 +491,15 @@ static int nbd_negotiate_options(NBDClient *client)
                     nbd_negotiate_send_rep(client->ioc, NBD_REP_ERR_POLICY,
                                            clientflags);
                 }
-                return -EINVAL;
+                break;
             default:
                 TRACE("Unsupported option 0x%x", clientflags);
+                if (nbd_negotiate_drop_sync(client->ioc, length) != length) {
+                    return -EIO;
+                }
                 nbd_negotiate_send_rep(client->ioc, NBD_REP_ERR_UNSUP,
                                        clientflags);
-                return -EINVAL;
+                break;
             }
         } else {
             /*
@@ -654,6 +670,9 @@ static ssize_t nbd_send_reply(QIOChannel *ioc, struct nbd_reply *reply)
 
     reply->error = system_errno_to_nbd_errno(reply->error);
 
+    TRACE("Sending response to client: { .error = %d, handle = %" PRIu64 " }",
+          reply->error, reply->handle);
+
     /* Reply
        [ 0 ..  3]    magic   (NBD_REPLY_MAGIC)
        [ 4 ..  7]    error   (0 == no error)
@@ -662,8 +681,6 @@ static ssize_t nbd_send_reply(QIOChannel *ioc, struct nbd_reply *reply)
     stl_be_p(buf, NBD_REPLY_MAGIC);
     stl_be_p(buf + 4, reply->error);
     stq_be_p(buf + 8, reply->handle);
-
-    TRACE("Sending response to client");
 
     ret = write_sync(ioc, buf, sizeof(buf));
     if (ret < 0) {
@@ -1074,9 +1091,8 @@ static void nbd_trip(void *opaque)
             }
         }
 
-        ret = blk_read(exp->blk,
-                       (request.from + exp->dev_offset) / BDRV_SECTOR_SIZE,
-                       req->data, request.len / BDRV_SECTOR_SIZE);
+        ret = blk_pread(exp->blk, request.from + exp->dev_offset,
+                        req->data, request.len);
         if (ret < 0) {
             LOG("reading from file failed");
             reply.error = -ret;
@@ -1098,9 +1114,8 @@ static void nbd_trip(void *opaque)
 
         TRACE("Writing to device");
 
-        ret = blk_write(exp->blk,
-                        (request.from + exp->dev_offset) / BDRV_SECTOR_SIZE,
-                        req->data, request.len / BDRV_SECTOR_SIZE);
+        ret = blk_pwrite(exp->blk, request.from + exp->dev_offset,
+                        req->data, request.len);
         if (ret < 0) {
             LOG("writing to file failed");
             reply.error = -ret;

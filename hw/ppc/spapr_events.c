@@ -25,6 +25,7 @@
  *
  */
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "cpu.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/char.h"
@@ -36,7 +37,8 @@
 #include "hw/pci/pci.h"
 #include "hw/pci-host/spapr.h"
 #include "hw/ppc/spapr_drc.h"
-
+#include "qemu/help_option.h"
+#include "qemu/bcd.h"
 #include <libfdt.h>
 
 struct rtas_error_log {
@@ -387,6 +389,13 @@ static void spapr_powerdown_req(Notifier *n, void *opaque)
     qemu_irq_pulse(xics_get_qirq(spapr->icp, spapr->check_exception_irq));
 }
 
+static void spapr_hotplug_set_signalled(uint32_t drc_index)
+{
+    sPAPRDRConnector *drc = spapr_dr_connector_by_index(drc_index);
+    sPAPRDRConnectorClass *drck = SPAPR_DR_CONNECTOR_GET_CLASS(drc);
+    drck->set_signalled(drc);
+}
+
 static void spapr_hotplug_req_event(uint8_t hp_id, uint8_t hp_action,
                                     sPAPRDRConnectorType drc_type,
                                     uint32_t drc)
@@ -433,6 +442,9 @@ static void spapr_hotplug_req_event(uint8_t hp_id, uint8_t hp_action,
     switch (drc_type) {
     case SPAPR_DR_CONNECTOR_TYPE_PCI:
         hp->hotplug_type = RTAS_LOG_V6_HP_TYPE_PCI;
+        if (hp->hotplug_action == RTAS_LOG_V6_HP_ACTION_ADD) {
+            spapr_hotplug_set_signalled(drc);
+        }
         break;
     case SPAPR_DR_CONNECTOR_TYPE_LMB:
         hp->hotplug_type = RTAS_LOG_V6_HP_TYPE_MEMORY;

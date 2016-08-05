@@ -276,7 +276,7 @@ void cpu_disable_ticks(void)
    fairly approximate, so ignore small variation.
    When the guest is idle real and virtual time will be aligned in
    the IO wait loop.  */
-#define ICOUNT_WOBBLE (get_ticks_per_sec() / 10)
+#define ICOUNT_WOBBLE (NANOSECONDS_PER_SECOND / 10)
 
 static void icount_adjust(void)
 {
@@ -327,7 +327,7 @@ static void icount_adjust_vm(void *opaque)
 {
     timer_mod(icount_vm_timer,
                    qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                   get_ticks_per_sec() / 10);
+                   NANOSECONDS_PER_SECOND / 10);
     icount_adjust();
 }
 
@@ -338,10 +338,18 @@ static int64_t qemu_icount_round(int64_t count)
 
 static void icount_warp_rt(void)
 {
+    unsigned seq;
+    int64_t warp_start;
+
     /* The icount_warp_timer is rescheduled soon after vm_clock_warp_start
      * changes from -1 to another value, so the race here is okay.
      */
-    if (atomic_read(&vm_clock_warp_start) == -1) {
+    do {
+        seq = seqlock_read_begin(&timers_state.vm_clock_seqlock);
+        warp_start = vm_clock_warp_start;
+    } while (seqlock_read_retry(&timers_state.vm_clock_seqlock, seq));
+
+    if (warp_start == -1) {
         return;
     }
 
@@ -674,7 +682,7 @@ void configure_icount(QemuOpts *opts, Error **errp)
                                         icount_adjust_vm, NULL);
     timer_mod(icount_vm_timer,
                    qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                   get_ticks_per_sec() / 10);
+                   NANOSECONDS_PER_SECOND / 10);
 }
 
 /***********************************************************/

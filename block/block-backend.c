@@ -18,6 +18,7 @@
 #include "sysemu/blockdev.h"
 #include "sysemu/sysemu.h"
 #include "qapi-event.h"
+#include "qemu/id.h"
 
 /* Number of coroutines to reserve per attached device model */
 #define COROUTINE_POOL_RESERVATION 64
@@ -45,6 +46,8 @@ struct BlockBackend {
     /* If the BDS tree is removed, some of its options are stored here (which
      * can be used to restore those options in the new BDS on insert) */
     BlockBackendRootState root_state;
+
+    bool enable_write_cache;
 
     /* I/O stats (display with "info blockstats"). */
     BlockAcctStats stats;
@@ -158,6 +161,8 @@ BlockBackend *blk_new_open(const char *filename, const char *reference,
         blk_unref(blk);
         return NULL;
     }
+
+    blk_set_enable_write_cache(blk, true);
 
     return blk;
 }
@@ -368,23 +373,6 @@ BlockBackend *blk_by_name(const char *name)
 BlockDriverState *blk_bs(BlockBackend *blk)
 {
     return blk->root ? blk->root->bs : NULL;
-}
-
-/*
- * Changes the BlockDriverState attached to @blk
- */
-void blk_set_bs(BlockBackend *blk, BlockDriverState *bs)
-{
-    bdrv_ref(bs);
-
-    if (blk->root) {
-        blk->root->bs->blk = NULL;
-        bdrv_root_unref_child(blk->root);
-    }
-    assert(bs->blk == NULL);
-
-    blk->root = bdrv_root_attach_child(bs, "root", &child_root);
-    bs->blk = blk;
 }
 
 /*
@@ -711,9 +699,15 @@ static int coroutine_fn blk_co_pwritev(BlockBackend *blk, int64_t offset,
                                       unsigned int bytes, QEMUIOVector *qiov,
                                       BdrvRequestFlags flags)
 {
-    int ret = blk_check_byte_request(blk, offset, bytes);
+    int ret;
+
+    ret = blk_check_byte_request(blk, offset, bytes);
     if (ret < 0) {
         return ret;
+    }
+
+    if (!blk->enable_write_cache) {
+        flags |= BDRV_REQ_FUA;
     }
 
     return bdrv_co_do_pwritev(blk_bs(blk), offset, bytes, qiov, flags);
@@ -826,7 +820,7 @@ int blk_write_zeroes(BlockBackend *blk, int64_t sector_num,
                      int nb_sectors, BdrvRequestFlags flags)
 {
     return blk_rw(blk, sector_num, NULL, nb_sectors, blk_write_entry,
-                  BDRV_REQ_ZERO_WRITE);
+                  flags | BDRV_REQ_ZERO_WRITE);
 }
 
 static void error_callback_bh(void *opaque)
@@ -858,6 +852,7 @@ BlockAIOCB *blk_abort_aio_request(BlockBackend *blk,
 typedef struct BlkAioEmAIOCB {
     BlockAIOCB common;
     BlkRwCo rwco;
+    int bytes;
     bool has_returned;
     QEMUBH* bh;
 } BlkAioEmAIOCB;
@@ -883,7 +878,7 @@ static void blk_aio_complete_bh(void *opaque)
     blk_aio_complete(opaque);
 }
 
-static BlockAIOCB *blk_aio_prwv(BlockBackend *blk, int64_t offset,
+static BlockAIOCB *blk_aio_prwv(BlockBackend *blk, int64_t offset, int bytes,
                                 QEMUIOVector *qiov, CoroutineEntry co_entry,
                                 BdrvRequestFlags flags,
                                 BlockCompletionFunc *cb, void *opaque)
@@ -899,6 +894,7 @@ static BlockAIOCB *blk_aio_prwv(BlockBackend *blk, int64_t offset,
         .flags  = flags,
         .ret    = NOT_DONE,
     };
+    acb->bytes = bytes;
     acb->bh = NULL;
     acb->has_returned = false;
 
@@ -919,7 +915,8 @@ static void blk_aio_read_entry(void *opaque)
     BlkAioEmAIOCB *acb = opaque;
     BlkRwCo *rwco = &acb->rwco;
 
-    rwco->ret = blk_co_preadv(rwco->blk, rwco->offset, rwco->qiov->size,
+    assert(rwco->qiov->size == acb->bytes);
+    rwco->ret = blk_co_preadv(rwco->blk, rwco->offset, acb->bytes,
                               rwco->qiov, rwco->flags);
     blk_aio_complete(acb);
 }
@@ -929,8 +926,8 @@ static void blk_aio_write_entry(void *opaque)
     BlkAioEmAIOCB *acb = opaque;
     BlkRwCo *rwco = &acb->rwco;
 
-    rwco->ret = blk_co_pwritev(rwco->blk, rwco->offset,
-                               rwco->qiov ? rwco->qiov->size : 0,
+    assert(!rwco->qiov || rwco->qiov->size == acb->bytes);
+    rwco->ret = blk_co_pwritev(rwco->blk, rwco->offset, acb->bytes,
                                rwco->qiov, rwco->flags);
     blk_aio_complete(acb);
 }
@@ -943,8 +940,10 @@ BlockAIOCB *blk_aio_write_zeroes(BlockBackend *blk, int64_t sector_num,
         return blk_abort_aio_request(blk, cb, opaque, -EINVAL);
     }
 
-    return blk_aio_prwv(blk, sector_num << BDRV_SECTOR_BITS, NULL,
-                        blk_aio_write_entry, BDRV_REQ_ZERO_WRITE, cb, opaque);
+    return blk_aio_prwv(blk, sector_num << BDRV_SECTOR_BITS,
+                        nb_sectors << BDRV_SECTOR_BITS, NULL,
+                        blk_aio_write_entry, flags | BDRV_REQ_ZERO_WRITE,
+                        cb, opaque);
 }
 
 int blk_pread(BlockBackend *blk, int64_t offset, void *buf, int count)
@@ -1000,7 +999,8 @@ BlockAIOCB *blk_aio_readv(BlockBackend *blk, int64_t sector_num,
         return blk_abort_aio_request(blk, cb, opaque, -EINVAL);
     }
 
-    return blk_aio_prwv(blk, sector_num << BDRV_SECTOR_BITS, iov,
+    assert(nb_sectors << BDRV_SECTOR_BITS == iov->size);
+    return blk_aio_prwv(blk, sector_num << BDRV_SECTOR_BITS, iov->size, iov,
                         blk_aio_read_entry, 0, cb, opaque);
 }
 
@@ -1012,7 +1012,8 @@ BlockAIOCB *blk_aio_writev(BlockBackend *blk, int64_t sector_num,
         return blk_abort_aio_request(blk, cb, opaque, -EINVAL);
     }
 
-    return blk_aio_prwv(blk, sector_num << BDRV_SECTOR_BITS, iov,
+    assert(nb_sectors << BDRV_SECTOR_BITS == iov->size);
+    return blk_aio_prwv(blk, sector_num << BDRV_SECTOR_BITS, iov->size, iov,
                         blk_aio_write_entry, 0, cb, opaque);
 }
 
@@ -1222,28 +1223,12 @@ int blk_is_sg(BlockBackend *blk)
 
 int blk_enable_write_cache(BlockBackend *blk)
 {
-    BlockDriverState *bs = blk_bs(blk);
-
-    if (bs) {
-        return bdrv_enable_write_cache(bs);
-    } else {
-        return !!(blk->root_state.open_flags & BDRV_O_CACHE_WB);
-    }
+    return blk->enable_write_cache;
 }
 
 void blk_set_enable_write_cache(BlockBackend *blk, bool wce)
 {
-    BlockDriverState *bs = blk_bs(blk);
-
-    if (bs) {
-        bdrv_set_enable_write_cache(bs, wce);
-    } else {
-        if (wce) {
-            blk->root_state.open_flags |= BDRV_O_CACHE_WB;
-        } else {
-            blk->root_state.open_flags &= ~BDRV_O_CACHE_WB;
-        }
-    }
+    blk->enable_write_cache = wce;
 }
 
 void blk_invalidate_cache(BlockBackend *blk, Error **errp)
@@ -1468,7 +1453,7 @@ int coroutine_fn blk_co_write_zeroes(BlockBackend *blk, int64_t sector_num,
 
     return blk_co_pwritev(blk, sector_num << BDRV_SECTOR_BITS,
                           nb_sectors << BDRV_SECTOR_BITS, NULL,
-                          BDRV_REQ_ZERO_WRITE);
+                          flags | BDRV_REQ_ZERO_WRITE);
 }
 
 int blk_write_compressed(BlockBackend *blk, int64_t sector_num,
@@ -1504,11 +1489,22 @@ int blk_discard(BlockBackend *blk, int64_t sector_num, int nb_sectors)
 int blk_save_vmstate(BlockBackend *blk, const uint8_t *buf,
                      int64_t pos, int size)
 {
+    int ret;
+
     if (!blk_is_available(blk)) {
         return -ENOMEDIUM;
     }
 
-    return bdrv_save_vmstate(blk_bs(blk), buf, pos, size);
+    ret = bdrv_save_vmstate(blk_bs(blk), buf, pos, size);
+    if (ret < 0) {
+        return ret;
+    }
+
+    if (ret == size && !blk->enable_write_cache) {
+        ret = bdrv_flush(blk_bs(blk));
+    }
+
+    return ret < 0 ? ret : size;
 }
 
 int blk_load_vmstate(BlockBackend *blk, uint8_t *buf, int64_t pos, int size)

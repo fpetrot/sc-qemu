@@ -25,6 +25,7 @@
  *
  */
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/numa.h"
 #include "hw/hw.h"
@@ -63,7 +64,7 @@
 #include "hw/nmi.h"
 
 #include "hw/compat.h"
-#include "qemu-common.h"
+#include "qemu/cutils.h"
 
 #include <libfdt.h>
 
@@ -939,11 +940,10 @@ static void spapr_finalize_fdt(sPAPRMachineState *spapr,
 
     QLIST_FOREACH(phb, &spapr->phbs, list) {
         ret = spapr_populate_pci_dt(phb, PHANDLE_XICP, fdt);
-    }
-
-    if (ret < 0) {
-        fprintf(stderr, "couldn't setup PCI devices in fdt\n");
-        exit(1);
+        if (ret < 0) {
+            error_report("couldn't setup PCI devices in fdt");
+            exit(1);
+        }
     }
 
     /* RTAS */
@@ -2205,6 +2205,10 @@ static void spapr_machine_device_plug(HotplugHandler *hotplug_dev,
         }
         node = object_property_get_int(OBJECT(dev), PC_DIMM_NODE_PROP, errp);
         if (*errp) {
+            return;
+        }
+        if (node < 0 || node >= MAX_NODES) {
+            error_setg(errp, "Invaild node %d", node);
             return;
         }
 

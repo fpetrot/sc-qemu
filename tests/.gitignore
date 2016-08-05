@@ -39,6 +39,7 @@ test-io-channel-file.txt
 test-io-channel-socket
 test-io-channel-tls
 test-io-task
+test-logging
 test-mul64
 test-opts-visitor
 test-qapi-event.[ch]
@@ -68,5 +69,7 @@ test-write-threshold
 test-x86-cpuid
 test-xbzrle
 test-netfilter
+test-filter-mirror
+test-filter-redirector
 *-test
 qapi-schema/*.test.*

@@ -26,7 +26,8 @@
  * THE SOFTWARE.
  */
 
-#if defined(__linux__) && (defined(__x86_64__) || defined(__arm__))
+#if defined(__linux__) && \
+    (defined(__x86_64__) || defined(__arm__) || defined(__aarch64__))
    /* Use 2 MiB alignment so transparent hugepages can be used by KVM.
       Valgrind does not support alignments larger than 1 MiB,
       therefore we need special code which handles running on Valgrind. */
@@ -46,10 +47,12 @@
 
 #include "sysemu/sysemu.h"
 #include "trace.h"
+#include "qapi/error.h"
 #include "qemu/sockets.h"
 #include <sys/mman.h>
 #include <libgen.h>
 #include <sys/signal.h>
+#include "qemu/cutils.h"
 
 #ifdef CONFIG_LINUX
 #include <sys/syscall.h>

@@ -32,9 +32,11 @@
 
 #include "monitor/monitor.h"
 #include "qemu-common.h"
+#include "qemu/help_option.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/error-report.h"
 #include "qemu/sockets.h"
+#include "qemu/cutils.h"
 #include "qemu/config-file.h"
 #include "qmp-commands.h"
 #include "hw/qdev.h"
@@ -78,34 +80,6 @@ int default_net = 1;
 
 /***********************************************************/
 /* network device redirectors */
-
-#if defined(DEBUG_NET)
-static void hex_dump(FILE *f, const uint8_t *buf, int size)
-{
-    int len, i, j, c;
-
-    for(i=0;i<size;i+=16) {
-        len = size - i;
-        if (len > 16)
-            len = 16;
-        fprintf(f, "%08x ", i);
-        for(j=0;j<16;j++) {
-            if (j < len)
-                fprintf(f, " %02x", buf[i+j]);
-            else
-                fprintf(f, "   ");
-        }
-        fprintf(f, " ");
-        for(j=0;j<len;j++) {
-            c = buf[i+j];
-            if (c < ' ' || c > '~')
-                c = '.';
-            fprintf(f, "%c", c);
-        }
-        fprintf(f, "\n");
-    }
-}
-#endif
 
 static int get_str_sep(char *buf, int buf_size, const char **pp, int sep)
 {
@@ -662,7 +636,7 @@ static ssize_t qemu_send_packet_async_with_flags(NetClientState *sender,
 
 #ifdef DEBUG_NET
     printf("qemu_send_packet_async:\n");
-    hex_dump(stdout, buf, size);
+    qemu_hexdump((const char *)buf, stdout, "net", size);
 #endif
 
     if (sender->link_down || !sender->peer) {
@@ -709,23 +683,28 @@ ssize_t qemu_send_packet_raw(NetClientState *nc, const uint8_t *buf, int size)
 static ssize_t nc_sendv_compat(NetClientState *nc, const struct iovec *iov,
                                int iovcnt, unsigned flags)
 {
-    uint8_t buf[NET_BUFSIZE];
+    uint8_t *buf = NULL;
     uint8_t *buffer;
     size_t offset;
+    ssize_t ret;
 
     if (iovcnt == 1) {
         buffer = iov[0].iov_base;
         offset = iov[0].iov_len;
     } else {
+        buf = g_new(uint8_t, NET_BUFSIZE);
         buffer = buf;
-        offset = iov_to_buf(iov, iovcnt, 0, buf, sizeof(buf));
+        offset = iov_to_buf(iov, iovcnt, 0, buf, NET_BUFSIZE);
     }
 
     if (flags & QEMU_NET_PACKET_FLAG_RAW && nc->info->receive_raw) {
-        return nc->info->receive_raw(nc, buffer, offset);
+        ret = nc->info->receive_raw(nc, buffer, offset);
     } else {
-        return nc->info->receive(nc, buffer, offset);
+        ret = nc->info->receive(nc, buffer, offset);
     }
+
+    g_free(buf);
+    return ret;
 }
 
 ssize_t qemu_deliver_packet_iov(NetClientState *sender,
@@ -1052,32 +1031,32 @@ int net_client_init(QemuOpts *opts, int is_netdev, Error **errp)
 
     {
         /* Parse convenience option format ip6-net=fec0::0[/64] */
-        const char *ip6_net = qemu_opt_get(opts, "ip6-net");
+        const char *ip6_net = qemu_opt_get(opts, "ipv6-net");
 
         if (ip6_net) {
             char buf[strlen(ip6_net) + 1];
 
             if (get_str_sep(buf, sizeof(buf), &ip6_net, '/') < 0) {
                 /* Default 64bit prefix length.  */
-                qemu_opt_set(opts, "ip6-prefix", ip6_net, &error_abort);
-                qemu_opt_set_number(opts, "ip6-prefixlen", 64, &error_abort);
+                qemu_opt_set(opts, "ipv6-prefix", ip6_net, &error_abort);
+                qemu_opt_set_number(opts, "ipv6-prefixlen", 64, &error_abort);
             } else {
                 /* User-specified prefix length.  */
                 unsigned long len;
                 int err;
 
-                qemu_opt_set(opts, "ip6-prefix", buf, &error_abort);
+                qemu_opt_set(opts, "ipv6-prefix", buf, &error_abort);
                 err = qemu_strtoul(ip6_net, NULL, 10, &len);
 
                 if (err) {
                     error_setg(errp, QERR_INVALID_PARAMETER_VALUE,
-                              "ip6-prefix", "a number");
+                              "ipv6-prefix", "a number");
                 } else {
-                    qemu_opt_set_number(opts, "ip6-prefixlen", len,
+                    qemu_opt_set_number(opts, "ipv6-prefixlen", len,
                                         &error_abort);
                 }
             }
-            qemu_opt_unset(opts, "ip6-net");
+            qemu_opt_unset(opts, "ipv6-net");
         }
     }
 
@@ -1098,6 +1077,7 @@ int net_client_init(QemuOpts *opts, int is_netdev, Error **errp)
     }
 
     error_propagate(errp, err);
+    opts_visitor_cleanup(ov);
     return ret;
 }
 

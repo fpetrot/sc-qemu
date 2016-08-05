@@ -11,6 +11,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "qemu-common.h"
 #include "qapi/string-input-visitor.h"
 #include "qapi/visitor-impl.h"
@@ -221,7 +222,7 @@ static void parse_type_int64(Visitor *v, const char *name, int64_t *obj,
     return;
 
 error:
-    error_setg(errp, QERR_INVALID_PARAMETER_VALUE, name,
+    error_setg(errp, QERR_INVALID_PARAMETER_VALUE, name ? name : "null",
                "an int64 value or range");
 }
 

@@ -10,6 +10,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "qemu-common.h"
 #include "sysemu/replay.h"
 #include "replay-internal.h"
@@ -20,7 +21,7 @@
 
 /* Current version of the replay mechanism.
    Increase it when file format changes. */
-#define REPLAY_VERSION              0xe02003
+#define REPLAY_VERSION              0xe02004
 /* Size of replay log header */
 #define HEADER_SIZE                 (sizeof(uint32_t) + sizeof(uint64_t))
 
@@ -274,7 +275,7 @@ void replay_configure(QemuOpts *opts)
     rr = qemu_opt_get(opts, "rr");
     if (!rr) {
         /* Just enabling icount */
-        return;
+        goto out;
     } else if (!strcmp(rr, "record")) {
         mode = REPLAY_MODE_RECORD;
     } else if (!strcmp(rr, "replay")) {
@@ -292,6 +293,7 @@ void replay_configure(QemuOpts *opts)
 
     replay_enable(fname, mode);
 
+out:
     loc_pop(&loc);
 }
 

@@ -7,6 +7,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "qemu-common.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/error-report.h"
@@ -163,7 +164,7 @@ static void netfilter_set_status(Object *obj, const char *str, Error **errp)
         return;
     }
     nf->on = !nf->on;
-    if (nfc->status_changed) {
+    if (nf->netdev && nfc->status_changed) {
         nfc->status_changed(nf, errp);
     }
 }

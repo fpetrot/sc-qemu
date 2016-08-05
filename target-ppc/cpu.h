@@ -167,6 +167,8 @@ enum powerpc_excp_t {
     POWERPC_EXCP_970,
     /* POWER7 exception model           */
     POWERPC_EXCP_POWER7,
+    /* POWER8 exception model           */
+    POWERPC_EXCP_POWER8,
 #endif /* defined(TARGET_PPC64) */
 };
 
@@ -2277,6 +2279,14 @@ enum {
     HMER_XSCOM_STATUS_LSH       = (63 - 23),
 };
 
+/* Alternate Interrupt Location (AIL) */
+enum {
+    AIL_NONE                = 0,
+    AIL_RESERVED            = 1,
+    AIL_0001_8000           = 2,
+    AIL_C000_0000_0000_4000 = 3,
+};
+
 /*****************************************************************************/
 
 static inline target_ulong cpu_read_xer(CPUPPCState *env)
@@ -2403,6 +2413,16 @@ static inline bool msr_is_64bit(CPUPPCState *env, target_ulong msr)
     }
 
     return msr & (1ULL << MSR_SF);
+}
+
+/**
+ * Check whether register rx is in the range between start and
+ * start + nregs (as needed by the LSWX and LSWI instructions)
+ */
+static inline bool lsw_reg_in_range(int start, int nregs, int rx)
+{
+    return (start + nregs <= 32 && rx >= start && rx < start + nregs) ||
+           (start + nregs > 32 && (rx >= start || rx < start + nregs - 32));
 }
 
 extern void (*cpu_ppc_hypercall)(PowerPCCPU *);

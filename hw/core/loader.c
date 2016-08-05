@@ -43,6 +43,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "hw/hw.h"
 #include "disas/disas.h"
 #include "monitor/monitor.h"
@@ -53,6 +54,7 @@
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
 #include "hw/boards.h"
+#include "qemu/cutils.h"
 
 #include <zlib.h>
 
@@ -1049,6 +1051,20 @@ int rom_check_and_register_reset(void)
 void rom_set_fw(FWCfgState *f)
 {
     fw_cfg = f;
+}
+
+void rom_set_order_override(int order)
+{
+    if (!fw_cfg)
+        return;
+    fw_cfg_set_order_override(fw_cfg, order);
+}
+
+void rom_reset_order_override(void)
+{
+    if (!fw_cfg)
+        return;
+    fw_cfg_reset_order_override(fw_cfg);
 }
 
 static Rom *find_rom(hwaddr addr)

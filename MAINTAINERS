@@ -278,7 +278,8 @@ Guest CPU Cores (Xen):
 ----------------------
 
 X86
-M: Stefano Stabellini <stefano.stabellini@eu.citrix.com>
+M: Stefano Stabellini <sstabellini@kernel.org>
+M: Anthony Perard <anthony.perard@citrix.com>
 L: xen-devel@lists.xensource.com
 S: Supported
 F: xen-*
@@ -357,10 +358,7 @@ F: include/hw/timer/a9gtimer.h
 F: include/hw/timer/arm_mptimer.h
 
 Exynos
-M: Evgeny Voevodin <e.voevodin@samsung.com>
-M: Maksim Kozlov <m.kozlov@samsung.com>
 M: Igor Mitsyanko <i.mitsyanko@gmail.com>
-M: Dmitry Solodkiy <d.solodkiy@samsung.com>
 L: qemu-arm@nongnu.org
 S: Maintained
 F: hw/*/exynos*
@@ -987,6 +985,7 @@ F: tests/intel-hda-test.c
 
 Block layer core
 M: Kevin Wolf <kwolf@redhat.com>
+M: Max Reitz <mreitz@redhat.com>
 L: qemu-block@nongnu.org
 S: Supported
 F: block*
@@ -1000,6 +999,7 @@ T: git git://repo.or.cz/qemu/kevin.git block
 
 Block I/O path
 M: Stefan Hajnoczi <stefanha@redhat.com>
+M: Fam Zheng <famz@redhat.com>
 L: qemu-block@nongnu.org
 S: Supported
 F: async.c
@@ -1050,7 +1050,6 @@ M: Andreas Färber <afaerber@suse.de>
 S: Supported
 F: qom/cpu.c
 F: include/qom/cpu.h
-F: target-i386/cpu.c
 
 ICC Bus
 M: Igor Mammedov <imammedo@redhat.com>
@@ -1156,8 +1155,6 @@ M: Eduardo Habkost <ehabkost@redhat.com>
 S: Maintained
 F: numa.c
 F: include/sysemu/numa.h
-K: numa|NUMA
-K: srat|SRAT
 T: git git://github.com/ehabkost/qemu.git numa
 
 QAPI
@@ -1570,6 +1567,7 @@ F: block/win32-aio.c
 
 qcow2
 M: Kevin Wolf <kwolf@redhat.com>
+M: Max Reitz <mreitz@redhat.com>
 L: qemu-block@nongnu.org
 S: Supported
 F: block/qcow2*
@@ -1582,6 +1580,7 @@ F: block/qcow.c
 
 blkdebug
 M: Kevin Wolf <kwolf@redhat.com>
+M: Max Reitz <mreitz@redhat.com>
 L: qemu-block@nongnu.org
 S: Supported
 F: block/blkdebug.c
