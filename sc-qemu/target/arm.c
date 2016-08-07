@@ -53,11 +53,23 @@ void sc_qemu_target_qdev_create(sc_qemu_qdev *ret, sc_qemu_qdev_e devid, va_list
         break;
 
     case SC_QDEV_ARM_GIC:
-        u = va_arg(ap, uint32_t); /* num-irq property */
         ret->dev = qdev_create(NULL, "arm_gic");
-
         qdev_prop_set_uint32(ret->dev, "num-cpu", ret->ctx->num_cpu);
+
+        u = va_arg(ap, uint32_t);
+        qdev_prop_set_uint32(ret->dev, "revision", u);
+
+        u = va_arg(ap, uint32_t);
         qdev_prop_set_uint32(ret->dev, "num-irq", u);
+
+        bool b = (bool) va_arg(ap, int);
+        qdev_prop_set_bit(ret->dev, "has-security-extensions", b);
+
+        u = va_arg(ap, uint32_t);
+        qdev_prop_set_uint32(ret->dev, "cpu-iface-id", u);
+
+        u = va_arg(ap, uint32_t);
+        qdev_prop_set_uint32(ret->dev, "min-bpr", u);
 
         qdev_init_nofail(ret->dev);
         break;

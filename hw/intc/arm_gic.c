@@ -259,7 +259,7 @@ static void gic_activate_irq(GICState *s, int cpu, int irq)
      * and update the running priority.
      */
     int prio = gic_get_group_priority(s, cpu, irq);
-    int preemption_level = prio >> (GIC_MIN_BPR + 1);
+    int preemption_level = prio >> (s->min_bpr + 1);
     int regno = preemption_level / 32;
     int bitno = preemption_level % 32;
 
@@ -284,7 +284,7 @@ static int gic_get_prio_from_apr_bits(GICState *s, int cpu)
         if (!apr) {
             continue;
         }
-        return (i * 32 + ctz32(apr)) << (GIC_MIN_BPR + 1);
+        return (i * 32 + ctz32(apr)) << (s->min_bpr + 1);
     }
     return 0x100;
 }
@@ -1064,7 +1064,7 @@ static inline uint32_t gic_apr_ns_view(GICState *s, int cpu, int regno)
     /* Return the Nonsecure view of GICC_APR<regno>. This is the
      * second half of GICC_NSAPR.
      */
-    switch (GIC_MIN_BPR) {
+    switch (s->min_bpr) {
     case 0:
         if (regno < 2) {
             return s->nsapr[regno + 2][cpu];
@@ -1095,7 +1095,7 @@ static inline void gic_apr_write_ns_view(GICState *s, int cpu, int regno,
                                          uint32_t value)
 {
     /* Write the Nonsecure view of GICC_APR<regno>. */
-    switch (GIC_MIN_BPR) {
+    switch (s->min_bpr) {
     case 0:
         if (regno < 2) {
             s->nsapr[regno + 2][cpu] = value;
@@ -1160,6 +1160,34 @@ static MemTxResult gic_cpu_read(GICState *s, int cpu, int offset,
             *data = s->abpr[cpu];
         }
         break;
+    case 0x20: /* Aliased Interrupt Acknowledge */
+        /* GIC v2, no security: RAZ/WI?
+         * GIC v2, with security, secure access: AIAR (alias of NS IAR)
+         * GIC v2, with security, nonsecure access: RAZ/WI
+         * GIC v1: not implemented (RAZ/WI)
+         */
+        if (s->revision == 2 && s->security_extn && attrs.secure) {
+            MemTxAttrs ns_attrs = attrs;
+            ns_attrs.secure = 0;
+            *data = gic_acknowledge_irq(s, cpu, ns_attrs);
+        } else {
+            *data = 0;
+        }
+        break;
+    case 0x28: /* Aliased Highest Pending Interrupt */
+        /* GIC v2, no security: RAZ/WI?
+         * GIC v2, with security, secure access: AHPPIR (alias of NS HPPIR)
+         * GIC v2, with security, nonsecure access: RAZ/WI
+         * GIC v1: not implemented (RAZ/WI)
+         */
+        if (s->revision == 2 && s->security_extn && attrs.secure) {
+            MemTxAttrs ns_attrs = attrs;
+            ns_attrs.secure = 0;
+            *data = gic_get_current_pending_irq(s, cpu, ns_attrs);
+        } else {
+            *data = 0;
+        }
+        break;
     case 0xd0: case 0xd4: case 0xd8: case 0xdc:
     {
         int regno = (offset - 0xd0) / 4;
@@ -1186,6 +1214,9 @@ static MemTxResult gic_cpu_read(GICState *s, int cpu, int offset,
         }
         break;
     }
+    case 0xfc: /* CPU interface indentification */
+        *data = s->cpu_if_id;
+        break;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
                       "gic_cpu_read: Bad offset %x\n", (int)offset);
@@ -1206,9 +1237,9 @@ static MemTxResult gic_cpu_write(GICState *s, int cpu, int offset,
         break;
     case 0x08: /* Binary Point */
         if (s->security_extn && !attrs.secure) {
-            s->abpr[cpu] = MAX(value & 0x7, GIC_MIN_ABPR);
+            s->abpr[cpu] = MAX(value & 0x7, s->min_bpr+1);
         } else {
-            s->bpr[cpu] = MAX(value & 0x7, GIC_MIN_BPR);
+            s->bpr[cpu] = MAX(value & 0x7, s->min_bpr);
         }
         break;
     case 0x10: /* End Of Interrupt */
@@ -1219,7 +1250,7 @@ static MemTxResult gic_cpu_write(GICState *s, int cpu, int offset,
             /* unimplemented, or NS access: RAZ/WI */
             return MEMTX_OK;
         } else {
-            s->abpr[cpu] = MAX(value & 0x7, GIC_MIN_ABPR);
+            s->abpr[cpu] = MAX(value & 0x7, s->min_bpr+1);
         }
         break;
     case 0xd0: case 0xd4: case 0xd8: case 0xdc:

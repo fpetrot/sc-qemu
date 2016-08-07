@@ -12,9 +12,13 @@ typedef enum sc_qemu_arm_irq_e {
 
 typedef enum sc_qemu_qdev_arm_e {
     /* Variadic initialisation :
+     *  - revision, uint32_t
      *  - number of interrupts, uint32_t
+     *  - has security extensions, bool
+     *  - minimal BPR, uint32_t
+     *  - CPU interface identification, uint32_t
      * MMIO Mapping :
-     *  0: GIC  base address
+     *  0: GIC base address
      */
     SC_QDEV_ARM_A15PRIV = SC_QDEV_LAST,
     SC_QDEV_ARM_GIC,

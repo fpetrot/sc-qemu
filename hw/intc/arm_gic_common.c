@@ -190,10 +190,10 @@ static void arm_gic_common_reset(DeviceState *dev)
             s->priority_mask[i] = resetprio;
         }
         s->current_pending[i] = 1023;
-        s->running_priority[i] = 0x100;
+        s->running_priority[i] = 0xff;
         s->cpu_ctlr[i] = 0;
-        s->bpr[i] = GIC_MIN_BPR;
-        s->abpr[i] = GIC_MIN_ABPR;
+        s->bpr[i] = s->min_bpr;
+        s->abpr[i] = s->min_bpr+1;
         for (j = 0; j < GIC_INTERNAL; j++) {
             s->priority1[j][i] = resetprio;
         }
@@ -254,6 +254,8 @@ static Property arm_gic_common_properties[] = {
     DEFINE_PROP_UINT32("revision", GICState, revision, 1),
     /* True if the GIC should implement the security extensions */
     DEFINE_PROP_BOOL("has-security-extensions", GICState, security_extn, 0),
+    DEFINE_PROP_UINT32("cpu-iface-id", GICState, cpu_if_id, 0),
+    DEFINE_PROP_UINT32("min-bpr", GICState, min_bpr, 0),
     DEFINE_PROP_END_OF_LIST(),
 };
 
