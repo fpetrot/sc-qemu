@@ -230,6 +230,7 @@ static int os_host_main_loop_wait(int64_t timeout)
      * a fake timeout in order to give the VCPU threads a chance to run.
      */
     if (!timeout && (spin_counter > MAX_MAIN_LOOP_SPIN)) {
+#if !defined(CONFIG_RABBITS)
         static bool notified;
 
         if (!notified && !qtest_driver()) {
@@ -238,6 +239,7 @@ static int os_host_main_loop_wait(int64_t timeout)
                     MAX_MAIN_LOOP_SPIN);
             notified = true;
         }
+#endif
 
         timeout = SCALE_MS;
     }
