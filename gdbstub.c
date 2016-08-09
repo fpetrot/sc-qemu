@@ -46,11 +46,20 @@ static inline int target_memory_rw_debug(CPUState *cpu, target_ulong addr,
                                          uint8_t *buf, int len, bool is_write)
 {
     CPUClass *cc = CPU_GET_CLASS(cpu);
+    int ret;
+    CPUState *cpu_save = current_cpu;
+
+    current_cpu = cpu;
 
     if (cc->memory_rw_debug) {
-        return cc->memory_rw_debug(cpu, addr, buf, len, is_write);
+        ret = cc->memory_rw_debug(cpu, addr, buf, len, is_write);
+    } else {
+        ret = cpu_memory_rw_debug(cpu, addr, buf, len, is_write);
     }
-    return cpu_memory_rw_debug(cpu, addr, buf, len, is_write);
+
+    current_cpu = cpu_save;
+
+    return ret;
 }
 
 enum {
