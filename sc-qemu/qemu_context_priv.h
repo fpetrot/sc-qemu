@@ -13,6 +13,7 @@ struct qemu_context {
     CPUState **cpus;
     QEMUTimer *deadline;
     int64_t max_run_time;
+    MemoryRegion *root_mr;
 };
 
 #endif

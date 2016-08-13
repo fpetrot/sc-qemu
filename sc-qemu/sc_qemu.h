@@ -53,6 +53,9 @@ struct sc_qemu_init_struct {
     int64_t          max_run_time;  /* < [in]  Maximum cpus step in ns of the QEMU virtual clock. 0 is no limit */
     int              cpu_mips_shift;/* < [in]  QEMU icount shift option */
     void             *opaque;       /* < [in]  Opaque used as parameter of SystemC cb */
+
+    bool             map_whole_as;  /* < [in]  If true, the whole address space is mapped
+                                               so that SystemC can intercept non-mapped memory access. */
 };
 
 #ifdef __cplusplus

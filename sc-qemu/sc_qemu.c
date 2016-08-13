@@ -86,18 +86,24 @@ static sc_qemu_qdev* sc_qemu_cpu_get_qdev(qemu_context *ctx, int cpu_idx)
     return ret;
 }
 
-static void sc_qemu_map_io(qemu_context *ctx, uint32_t base_address,
-                           uint32_t size)
+static MemoryRegion* map_io(qemu_context *ctx, MemoryRegion *root, uint64_t base, uint64_t size)
 {
-    MemoryRegion *sysmem = get_system_memory();
     MemoryRegion *mmio = g_new(MemoryRegion, 1);
     mmio_ctx *m_ctx = g_new(mmio_ctx, 1);
 
-    m_ctx->base = base_address;
+    m_ctx->base = base;
     m_ctx->qemu_ctx = ctx;
 
     memory_region_init_io(mmio, NULL, &sc_mmio_ops, m_ctx, "sc-mmio", size);
-    memory_region_add_subregion(sysmem, base_address, mmio);
+    memory_region_add_subregion(root, base, mmio);
+
+    return mmio;
+}
+
+static void sc_qemu_map_io(qemu_context *ctx, uint32_t base_address,
+                           uint32_t size)
+{
+    map_io(ctx, ctx->root_mr, base_address, size);
 }
 
 static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
@@ -204,6 +210,12 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
         ctx->deadline = timer_new_ns(QEMU_CLOCK_VIRTUAL, deadline_cb, ctx);
         ctx->max_run_time = s->max_run_time;
         timer_mod(ctx->deadline, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ctx->max_run_time);
+    }
+
+    if (s->map_whole_as) {
+        ctx->root_mr = map_io(ctx, get_system_memory(), 0, ((uint64_t)UINT32_MAX)+1);
+    } else {
+        ctx->root_mr = get_system_memory();
     }
 
     return ctx;
