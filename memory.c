@@ -1404,6 +1404,25 @@ void memory_region_init_rom_device(MemoryRegion *mr,
     mr->ram_block = qemu_ram_alloc(size, mr, errp);
 }
 
+void memory_region_init_rom_device_ptr(MemoryRegion *mr,
+                                       struct Object *owner,
+                                       const MemoryRegionOps *ops,
+                                       void *opaque,
+                                       const char *name,
+                                       uint64_t size,
+                                       void *ptr)
+{
+    memory_region_init(mr, owner, name, size);
+    mr->ops = ops;
+    mr->opaque = opaque;
+    mr->terminates = true;
+    mr->rom_device = true;
+    mr->destructor = memory_region_destructor_rom_device;
+
+    assert(ptr != NULL);
+    mr->ram_block = qemu_ram_alloc_from_ptr(size, ptr, mr, &error_fatal);
+}
+
 void memory_region_init_iommu(MemoryRegion *mr,
                               Object *owner,
                               const MemoryRegionIOMMUOps *ops,

@@ -117,8 +117,17 @@ static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
     snprintf(name, sizeof(name), "sc-dmi%d", dmi_count);
     dmi_count++;
 
-    memory_region_init_ram_ptr(dmi, NULL, name, size, data);
-    memory_region_set_readonly(dmi, readonly);
+    if (!readonly) {
+        memory_region_init_ram_ptr(dmi, NULL, name, size, data);
+    } else {
+        mmio_ctx *m_ctx = g_new(mmio_ctx, 1);
+        m_ctx->base = base_address;
+        m_ctx->qemu_ctx = ctx;
+
+        memory_region_init_rom_device_ptr(dmi, NULL, &sc_mmio_ops, m_ctx,
+                                          name, size, data);
+    }
+
     vmstate_register_ram_global(dmi);
     memory_region_add_subregion(sysmem, base_address, dmi);
 }

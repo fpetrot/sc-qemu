@@ -438,8 +438,8 @@ void memory_region_init_alias(MemoryRegion *mr,
                               uint64_t size);
 
 /**
- * memory_region_init_rom_device:  Initialize a ROM memory region.  Writes are
- *                                 handled via callbacks.
+ * memory_region_init_rom_device: Initialize a ROM memory region.  Writes are
+ *                                handled via callbacks.
  *
  * If NULL callbacks pointer is given, then I/O space is not supposed to be
  * handled by QEMU itself. Any access via the memory API will cause an abort().
@@ -458,6 +458,28 @@ void memory_region_init_rom_device(MemoryRegion *mr,
                                    const char *name,
                                    uint64_t size,
                                    Error **errp);
+
+/**
+ * memory_region_init_rom_device_ptr: Initialize a ROM memory region. Writes are
+ *                                    handled via callbacks.
+ *
+ * If NULL callbacks pointer is given, then I/O space is not supposed to be
+ * handled by QEMU itself. Any access via the memory API will cause an abort().
+ *
+ * @mr: the #MemoryRegion to be initialized.
+ * @owner: the object that tracks the region's reference count
+ * @ops: callbacks for write access handling.
+ * @name: the name of the region.
+ * @size: size of the region.
+ * @ptr: memory to be mapped; must contain at least @size bytes.
+ */
+void memory_region_init_rom_device_ptr(MemoryRegion *mr,
+				       struct Object *owner,
+				       const MemoryRegionOps *ops,
+				       void *opaque,
+				       const char *name,
+				       uint64_t size,
+				       void *ptr);
 
 /**
  * memory_region_init_reservation: Initialize a memory region that reserves
