@@ -47,6 +47,7 @@ typedef sc_qemu_qdev* (*sc_qemu_qdev_create_fn)(qemu_context *, int qdev_id, ...
 typedef void (*sc_qemu_qdev_mmio_map_fn)(sc_qemu_qdev *dev, int mmio_id, uint32_t addr);
 typedef void (*sc_qemu_qdev_irq_connect_fn)(sc_qemu_qdev *src, int src_idx, sc_qemu_qdev *dst, int dst_idx);
 typedef void (*sc_qemu_qdev_irq_update_fn)(sc_qemu_qdev *dev, int irq_idx, int level);
+typedef void (*sc_qemu_qdev_connect_gpio_out_fn)(sc_qemu_qdev *dev, int gpio_idx, void (*handler)(void *opaque, int n, int level), void *opaque);
 
 typedef uint32_t (*qemu_sc_read_fn)(void *opaque, uint32_t addr, uint32_t size);
 typedef void (*qemu_sc_write_fn)(void *opaque, uint32_t addr, uint32_t val, uint32_t size);

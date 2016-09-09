@@ -73,3 +73,9 @@ void sc_qemu_qdev_irq_update(sc_qemu_qdev *dev, int irq_idx, int level)
     qemu_set_irq(i, level);
 }
 
+void sc_qemu_qdev_connect_gpio_out(sc_qemu_qdev *dev, int gpio_idx, void (*handler)(void *opaque, int n, int level), void *opaque)
+{
+    qemu_irq interceptor = qemu_allocate_irq(handler, opaque, 1);
+    qdev_connect_gpio_out(dev->dev, gpio_idx, interceptor);
+}
+

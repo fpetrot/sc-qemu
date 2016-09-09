@@ -31,6 +31,7 @@ struct qemu_import {
     sc_qemu_qdev_mmio_map_fn    qdev_mmio_map;      /* < Map a qdev to a memory area */
     sc_qemu_qdev_irq_connect_fn qdev_irq_connect;   /* < Connect irq lines of two qdevs */
     sc_qemu_qdev_irq_update_fn  qdev_irq_update;    /* < Update a qdev input irq line */
+    sc_qemu_qdev_connect_gpio_out_fn qdev_connect_gpio_out;
 
     sc_qemu_char_dev_create_fn          char_dev_create;        /* < Create a qemu char device */
     sc_qemu_char_dev_write_fn           char_dev_write;         /* < Write to a qemu char device */
