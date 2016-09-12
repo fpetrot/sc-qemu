@@ -8,6 +8,7 @@
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
 #include "exec/gdbstub.h"
+#include "qapi/error.h"
 
 #include "sc_qemu.h"
 #include "sc_machine.h"
@@ -81,7 +82,7 @@ static sc_qemu_qdev* sc_qemu_cpu_get_qdev(qemu_context *ctx, int cpu_idx)
 
     ret->ctx = ctx;
     ret->id = SC_QDEV_CPU;
-    ret->dev = DEVICE(ctx->cpus[cpu_idx]);
+    ret->dev = DEVICE(qemu_get_cpu(cpu_idx));
 
     return ret;
 }
@@ -205,6 +206,10 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
     s->q_import->char_dev_create = sc_qemu_char_dev_create;
     s->q_import->char_dev_write = sc_qemu_char_dev_write;
     s->q_import->char_dev_register_read = sc_qemu_char_dev_register_read;
+    s->q_import->object_new = sc_qemu_object_new;
+    s->q_import->object_property_set_bool = sc_qemu_object_property_set_bool;
+    s->q_import->object_property_set_int = sc_qemu_object_property_set_int;
+    s->q_import->object_property_set_str = sc_qemu_object_property_set_str;
 
     ctx = sc_qemu_machine_get_context();
 

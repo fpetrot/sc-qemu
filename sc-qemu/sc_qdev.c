@@ -5,6 +5,7 @@
 #include "sysemu/char.h"
 #include "hw/char/serial.h"
 #include "exec/address-spaces.h"
+#include "qapi/error.h"
 
 #include "sc_qdev_priv.h"
 #include "qemu_context_priv.h"
@@ -73,3 +74,41 @@ void sc_qemu_qdev_irq_update(sc_qemu_qdev *dev, int irq_idx, int level)
     qemu_set_irq(i, level);
 }
 
+sc_qemu_object * sc_qemu_object_new(qemu_context *ctx, const char *typename)
+{
+    sc_qemu_object *ret = NULL;
+
+    ret = g_malloc0(sizeof(sc_qemu_object));
+    ret->ctx = ctx;
+
+    ret->obj = object_new(typename);
+
+    return ret;
+}
+
+void sc_qemu_object_property_set_bool(sc_qemu_object *obj, bool val, const char *name)
+{
+    Object *o = obj->obj;
+
+    if (object_property_find(o, name, NULL)) {
+        object_property_set_bool(o, val, name, &error_abort);
+    }
+}
+
+void sc_qemu_object_property_set_int(sc_qemu_object *obj, int64_t val, const char *name)
+{
+    Object *o = obj->obj;
+
+    if (object_property_find(o, name, NULL)) {
+        object_property_set_int(o, val, name, &error_abort);
+    }
+}
+
+void sc_qemu_object_property_set_str(sc_qemu_object *obj, const char *val, const char *name)
+{
+    Object *o = obj->obj;
+
+    if (object_property_find(o, name, NULL)) {
+        object_property_set_str(o, val, name, &error_abort);
+    }
+}

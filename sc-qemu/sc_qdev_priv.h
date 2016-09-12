@@ -9,4 +9,8 @@ struct sc_qemu_qdev {
     DeviceState    *dev;
 };
 
+struct sc_qemu_object {
+    qemu_context   *ctx;
+    Object         *obj;
+};
 #endif

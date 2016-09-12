@@ -19,16 +19,6 @@ void sc_qemu_machine_init_target(qemu_context *ctx, const char *model)
     }
 
     ctx->cpus = g_malloc0(sizeof(CPUState*) * smp_cpus);
-
-    for(i = 0; i < smp_cpus; i++) {
-        cpu = cpu_arm_init(m);
-        if (!cpu) {
-            fprintf(stderr, "Unable to find CPU definition\n");
-            exit(1);
-        }
-
-        ctx->cpus[i] = CPU(cpu);
-    }
 }
 
 void sc_qemu_target_qdev_create(sc_qemu_qdev *ret, sc_qemu_qdev_e devid, va_list ap)

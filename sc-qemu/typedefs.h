@@ -3,6 +3,7 @@
 
 typedef struct qemu_context qemu_context;
 typedef struct sc_qemu_qdev sc_qemu_qdev;
+typedef struct sc_qemu_object sc_qemu_object;
 
 typedef struct qemu_import qemu_import;
 typedef struct systemc_import systemc_import;
@@ -55,5 +56,10 @@ typedef sc_qemu_char_dev* (*sc_qemu_char_dev_create_fn)(qemu_context *);
 typedef int (*sc_qemu_char_dev_write_fn)(sc_qemu_char_dev *dev, const uint8_t *data, int len);
 typedef void (*sc_qemu_char_dev_read_fn)(void *opaque, const uint8_t *data, int len);
 typedef void (*sc_qemu_char_dev_register_read_fn)(sc_qemu_char_dev *dev, sc_qemu_char_dev_read_fn, void *opaque);
+
+typedef sc_qemu_object* (*sc_qemu_object_new_fn)(qemu_context *ctx, const char *type_name);
+typedef void (*sc_qemu_object_property_set_bool_fn)(sc_qemu_object *obj, bool val, const char *name);
+typedef void (*sc_qemu_object_property_set_int_fn)(sc_qemu_object *obj, int64_t val, const char *name);
+typedef void (*sc_qemu_object_property_set_str_fn)(sc_qemu_object *obj, const char * val, const char *name);
 
 #endif
