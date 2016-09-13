@@ -73,9 +73,28 @@ void sc_qemu_qdev_irq_update(sc_qemu_qdev *dev, int irq_idx, int level)
     qemu_set_irq(i, level);
 }
 
-void sc_qemu_qdev_connect_gpio_out(sc_qemu_qdev *dev, int gpio_idx, void (*handler)(void *opaque, int n, int level), void *opaque)
+
+struct gpio_cb_descr {
+    sc_qemu_qdev_gpio_cb_fn cb;
+    sc_qemu_qdev *dev;
+    void *opaque;
+};
+
+static void qdev_gpio_cb(void *opaque, int n, int level)
 {
-    qemu_irq interceptor = qemu_allocate_irq(handler, opaque, 1);
+    struct gpio_cb_descr *descr = (struct gpio_cb_descr*) opaque;
+    descr->cb(descr->dev, n, level, descr->opaque);
+}
+
+void sc_qemu_qdev_gpio_register_cb(sc_qemu_qdev *dev, int gpio_idx,
+                                   sc_qemu_qdev_gpio_cb_fn cb, void *opaque)
+{
+    struct gpio_cb_descr *descr = g_malloc(sizeof(struct gpio_cb_descr));
+    descr->cb = cb;
+    descr->dev = dev;
+    descr->opaque = opaque;
+
+    qemu_irq interceptor = qemu_allocate_irq(qdev_gpio_cb, (void*) descr, 1);
     qdev_connect_gpio_out(dev->dev, gpio_idx, interceptor);
 }
 

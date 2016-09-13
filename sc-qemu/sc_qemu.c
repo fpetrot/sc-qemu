@@ -193,7 +193,7 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
     s->q_import->qdev_mmio_map = sc_qemu_qdev_mmio_map;
     s->q_import->qdev_irq_connect = sc_qemu_qdev_irq_connect;
     s->q_import->qdev_irq_update = sc_qemu_qdev_irq_update;
-    s->q_import->qdev_connect_gpio_out = sc_qemu_qdev_connect_gpio_out;
+    s->q_import->qdev_gpio_register_cb = sc_qemu_qdev_gpio_register_cb;
     s->q_import->char_dev_create = sc_qemu_char_dev_create;
     s->q_import->char_dev_write = sc_qemu_char_dev_write;
     s->q_import->char_dev_register_read = sc_qemu_char_dev_register_read;
