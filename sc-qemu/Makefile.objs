@@ -1,4 +1,2 @@
-obj-y += sc_qemu.o
-obj-y += sc_machine.o sc_qdev.o sc_qemu_char_dev.o
-
-obj-y += target/$(TARGET_NAME).o
+obj-y += sc-qemu.o
+obj-y += sc-object.o sc-qemu-char-dev.o

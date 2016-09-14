@@ -17,21 +17,14 @@ extern "C" {
 
 #include "typedefs.h"
 
-#include "sc_qdev.h"
-#include "sc_qemu_char_dev.h"
-#include "target/arm.h"
+#include "sc-object.h"
+#include "sc-qemu-char-dev.h"
 
 struct qemu_import {
     sc_qemu_cpu_loop_fn                cpu_loop;              /* < Run the CPUs */
-    sc_qemu_cpu_get_qdev_fn            cpu_get_qdev;          /* < Get the qdev corresponding to a cpu */
     sc_qemu_map_io_fn                  map_io;                /* < Map a memory area as io */
     sc_qemu_map_dmi_fn                 map_dmi;               /* < Map a memory area with direct memory access */
     sc_qemu_start_gdbserver_fn         start_gdbserver;       /* < Start a gdb server on the given port */
-    sc_qemu_qdev_create_fn             qdev_create;           /* < Create a new QEMU device */
-    sc_qemu_qdev_mmio_map_fn           qdev_mmio_map;         /* < Map a qdev to a memory area */
-    sc_qemu_qdev_irq_connect_fn        qdev_irq_connect;      /* < Connect irq lines of two qdevs */
-    sc_qemu_qdev_irq_update_fn         qdev_irq_update;       /* < Update a qdev input irq line */
-    sc_qemu_qdev_gpio_register_cb_fn   qdev_gpio_register_cb; /* < Register a callback called on gpio state change */
 
     sc_qemu_char_dev_create_fn          char_dev_create;        /* < Create a qemu char device */
     sc_qemu_char_dev_write_fn           char_dev_write;         /* < Write to a qemu char device */
@@ -41,6 +34,13 @@ struct qemu_import {
     sc_qemu_object_property_set_bool_fn object_property_set_bool; /* < Set a bool property on object */
     sc_qemu_object_property_set_int_fn  object_property_set_int;  /* < Set a int property on object */
     sc_qemu_object_property_set_str_fn  object_property_set_str;  /* < Set a string property on object */
+    sc_qemu_object_mmio_map_fn          object_mmio_map;          /* < Map a qdev memory area */
+    sc_qemu_object_gpio_connect_fn      object_gpio_connect;      /* < Connect two gpios together */
+    sc_qemu_object_gpio_update_fn       object_gpio_update;       /* < Set the value of a input gpio */
+    sc_qemu_object_gpio_register_cb_fn  object_gpio_register_cb;  /* < Register a callback on out gpio value change */
+
+    sc_qemu_cpu_get_id_fn               cpu_get_id;               /* < Get the CPU id of the corresponding
+                                                                       sc_qemu_object */
 };
 
 struct systemc_import {
@@ -53,8 +53,6 @@ struct sc_qemu_init_struct {
                                      *  This field is not allocated by QEMU and
                                      *  must target a valid address before the init call */
     systemc_import   sc_import;     /* < [in]  SystemC callbacks used by QEMU  */
-    const char       *cpu_model;    /* < [in]  Requested cpu model */
-    int              num_cpu;       /* < [in]  Requested number of cpus */
 
     int64_t          max_run_time;  /* < [in]  Maximum cpus step in ns of the QEMU virtual clock. 0 is no limit */
     int              cpu_mips_shift;/* < [in]  QEMU icount shift option */
@@ -62,6 +60,10 @@ struct sc_qemu_init_struct {
 
     bool             map_whole_as;  /* < [in]  If true, the whole address space is mapped
                                                so that SystemC can intercept non-mapped memory access. */
+};
+
+struct sc_qemu_io_attr {
+    int cpuid;
 };
 
 #ifdef __cplusplus

@@ -2,7 +2,7 @@
 #include "sysemu/char.h"
 #include "sysemu/sysemu.h"
 
-#include "sc_qemu_char_dev.h"
+#include "sc-qemu-char-dev.h"
 
 struct sc_qemu_char_dev {
     qemu_context *ctx;

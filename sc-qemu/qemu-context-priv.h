@@ -4,13 +4,11 @@
 #include "sysemu/sysemu.h"
 #include "qemu/typedefs.h"
 
-#include "sc_qemu.h"
+#include "sc-qemu.h"
 
 struct qemu_context {
     void *opaque;
     systemc_import sysc;
-    int num_cpu;
-    CPUState **cpus;
     QEMUTimer *deadline;
     int64_t max_run_time;
     MemoryRegion *root_mr;

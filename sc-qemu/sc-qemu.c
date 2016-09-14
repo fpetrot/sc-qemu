@@ -10,10 +10,9 @@
 #include "exec/gdbstub.h"
 #include "qapi/error.h"
 
-#include "sc_qemu.h"
-#include "sc_machine.h"
-#include "qemu_context_priv.h"
-#include "sc_qdev_priv.h"
+#include "sc-qemu.h"
+#include "qemu-context-priv.h"
+#include "sc-object-priv.h"
 
 qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s);
 
@@ -32,18 +31,24 @@ static uint64_t sc_mmio_read(void *opaque, hwaddr offset,
                            unsigned size)
 {
     mmio_ctx *ctx = (mmio_ctx*) opaque;
+    sc_qemu_io_attr attr;
+
+    attr.cpuid = current_cpu->cpu_index;
 
     return ctx->qemu_ctx->sysc.read(ctx->qemu_ctx->opaque,
-                                    ctx->base + offset, size);
+                                    ctx->base + offset, size, &attr);
 }
 
 static void sc_mmio_write(void *opaque, hwaddr offset,
                         uint64_t value, unsigned size)
 {
     mmio_ctx *ctx = (mmio_ctx*) opaque;
+    sc_qemu_io_attr attr;
+
+    attr.cpuid = current_cpu->cpu_index;
 
     ctx->qemu_ctx->sysc.write(ctx->qemu_ctx->opaque,
-                              ctx->base + offset, value, size);
+                              ctx->base + offset, value, size, &attr);
 }
 
 static const MemoryRegionOps sc_mmio_ops = {
@@ -72,19 +77,6 @@ static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed)
     }
 
     return main_loop_should_exit();
-}
-
-static sc_qemu_qdev* sc_qemu_cpu_get_qdev(qemu_context *ctx, int cpu_idx)
-{
-    sc_qemu_qdev *ret = NULL;
-
-    ret = g_malloc(sizeof(sc_qemu_qdev));
-
-    ret->ctx = ctx;
-    ret->id = SC_QDEV_CPU;
-    ret->dev = DEVICE(qemu_get_cpu(cpu_idx));
-
-    return ret;
 }
 
 static MemoryRegion* map_io(qemu_context *ctx, MemoryRegion *root, uint64_t base, uint64_t size)
@@ -151,17 +143,12 @@ static void deadline_cb(void *opaque)
 
 qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 {
-    char num_cpu[4];
     size_t i;
     ctor_fn ctor;
 
-    snprintf(num_cpu, sizeof(num_cpu), "%d", s->num_cpu);
-
     char const * qemu_base_argv[] = {
         "",
-        "-M", "sc-qemu",
-        "-cpu", s->cpu_model,
-        "-smp", num_cpu,
+        "-M", "none",
         "-monitor", "null",
         "-serial", "null",
         "-nographic",
@@ -195,15 +182,9 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 
     /* SystemC to QEMU fonctions */
     s->q_import->cpu_loop = sc_qemu_cpu_loop;
-    s->q_import->cpu_get_qdev = sc_qemu_cpu_get_qdev;
     s->q_import->map_io = sc_qemu_map_io;
     s->q_import->map_dmi = sc_qemu_map_dmi;
     s->q_import->start_gdbserver = sc_qemu_start_gdbserver;
-    s->q_import->qdev_create = sc_qemu_qdev_create;
-    s->q_import->qdev_mmio_map = sc_qemu_qdev_mmio_map;
-    s->q_import->qdev_irq_connect = sc_qemu_qdev_irq_connect;
-    s->q_import->qdev_irq_update = sc_qemu_qdev_irq_update;
-    s->q_import->qdev_gpio_register_cb = sc_qemu_qdev_gpio_register_cb;
     s->q_import->char_dev_create = sc_qemu_char_dev_create;
     s->q_import->char_dev_write = sc_qemu_char_dev_write;
     s->q_import->char_dev_register_read = sc_qemu_char_dev_register_read;
@@ -211,11 +192,15 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
     s->q_import->object_property_set_bool = sc_qemu_object_property_set_bool;
     s->q_import->object_property_set_int = sc_qemu_object_property_set_int;
     s->q_import->object_property_set_str = sc_qemu_object_property_set_str;
+    s->q_import->object_mmio_map = sc_qemu_object_mmio_map;
+    s->q_import->object_gpio_connect = sc_qemu_object_gpio_connect;
+    s->q_import->object_gpio_update = sc_qemu_object_gpio_update;
+    s->q_import->object_gpio_register_cb = sc_qemu_object_gpio_register_cb;
+    s->q_import->cpu_get_id = sc_qemu_cpu_get_id;
 
-    ctx = sc_qemu_machine_get_context();
+    ctx = g_malloc0(sizeof(qemu_context));
 
     ctx->opaque = s->opaque;
-    ctx->num_cpu = s->num_cpu;
 
     /* QEMU to SystemC functions */
     memcpy(&(ctx->sysc), &(s->sc_import), sizeof(systemc_import));
@@ -245,3 +230,4 @@ void sc_qemu_do_register_ctor(ctor_fn f)
     g_array_append_val(ctor_fns, f);
     ctor_count++;
 }
+
