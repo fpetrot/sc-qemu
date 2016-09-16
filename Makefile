@@ -497,11 +497,10 @@ endif
 ifdef CONFIG_RABBITS
 	$(INSTALL_DIR) "$(DESTDIR)$(includedir)/sc-qemu"
 	$(INSTALL_DIR) "$(DESTDIR)$(includedir)/sc-qemu/target"
-	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/sc_qemu.h "$(DESTDIR)$(includedir)/sc-qemu"
-	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/sc_qemu_char_dev.h "$(DESTDIR)$(includedir)/sc-qemu"
-	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/sc_qdev.h "$(DESTDIR)$(includedir)/sc-qemu"
+	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/sc-qemu.h "$(DESTDIR)$(includedir)/sc-qemu"
+	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/sc-qemu-char-dev.h "$(DESTDIR)$(includedir)/sc-qemu"
+	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/sc-qobject.h "$(DESTDIR)$(includedir)/sc-qemu"
 	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/typedefs.h "$(DESTDIR)$(includedir)/sc-qemu"
-	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/target/arm.h "$(DESTDIR)$(includedir)/sc-qemu/target"
 endif
 
 # various test targets
