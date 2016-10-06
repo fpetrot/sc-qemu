@@ -5973,6 +5973,7 @@ fi
 
 if test "$rabbits" = "yes"; then
   echo "CONFIG_RABBITS=y" >> $config_host_mak
+  echo "LDFLAGS+=-Wl,-wrap,abort -Wl,-wrap,exit" >> $config_host_mak
 fi
 
 # build tree in object directory in case the source is not in the current directory

@@ -62,21 +62,18 @@ static const MemoryRegionOps sc_mmio_ops = {
 bool main_loop_should_exit(void);
 /* ---- */
 
+static void * main_thread(void *arg);
+
 static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed)
 {
-    int64_t before;
+    qemu_mutex_unlock(&ctx->mutex_main);
+    qemu_mutex_lock(&ctx->mutex_sc);
 
     if (elapsed) {
-        before = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        *elapsed = ctx->last_elapsed;
     }
 
-    main_loop_wait(true);
-
-    if (elapsed) {
-        *elapsed = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - before;
-    }
-
-    return main_loop_should_exit();
+    return (ctx->main_status != MAIN_OK) || main_loop_should_exit();
 }
 
 static MemoryRegion* map_io(qemu_context *ctx, MemoryRegion *root, uint64_t base, uint64_t size)
@@ -131,21 +128,108 @@ static void sc_qemu_start_gdbserver(qemu_context *ctx, const char *port)
     qemu_system_debug_request();
 }
 
-int qemu_main(int argc, char const * argv[], char **envp);
-
-
 static void deadline_cb(void *opaque)
 {
     qemu_context *ctx = (qemu_context *) opaque;
 
-    timer_mod(ctx->deadline, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ctx->max_run_time);
+    timer_mod(ctx->deadline, qemu_clock_get_ns(ctx->limiter_clock) + ctx->max_run_time_ns);
 }
 
-qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
+
+static qemu_context *main_thread_ctx = NULL;
+
+static void * main_thread(void *arg)
+{
+    qemu_context *ctx = (qemu_context*) arg;
+    static int last_io = 0;
+    int64_t before;
+
+    main_thread_ctx = ctx;
+
+    for (;;) {
+        qemu_mutex_lock(&ctx->mutex_main);
+
+        before = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        last_io = main_loop_wait(last_io > 0);
+        ctx->last_elapsed = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - before;
+
+        ctx->main_status = MAIN_OK;
+        qemu_mutex_unlock(&ctx->mutex_sc);
+    }
+
+    return NULL;
+}
+
+static void call_qemu_ctors(void)
 {
     size_t i;
     ctor_fn ctor;
 
+    for (i = 0; i < ctor_count; i++) {
+        ctor = g_array_index(ctor_fns, ctor_fn, i);
+        ctor();
+    }
+
+    g_array_free(ctor_fns, TRUE);
+    ctor_fns = NULL;
+    ctor_count = 0;
+
+}
+
+static void init_q_import(qemu_import *q_import)
+{
+    /* SystemC to QEMU fonctions */
+    q_import->cpu_loop = sc_qemu_cpu_loop;
+    q_import->map_io = sc_qemu_map_io;
+    q_import->map_dmi = sc_qemu_map_dmi;
+    q_import->start_gdbserver = sc_qemu_start_gdbserver;
+    q_import->char_dev_create = sc_qemu_char_dev_create;
+    q_import->char_dev_write = sc_qemu_char_dev_write;
+    q_import->char_dev_register_read = sc_qemu_char_dev_register_read;
+    q_import->object_new = sc_qemu_object_new;
+    q_import->object_property_set_bool = sc_qemu_object_property_set_bool;
+    q_import->object_property_set_int = sc_qemu_object_property_set_int;
+    q_import->object_property_set_str = sc_qemu_object_property_set_str;
+    q_import->object_mmio_map = sc_qemu_object_mmio_map;
+    q_import->object_gpio_connect = sc_qemu_object_gpio_connect;
+    q_import->object_gpio_update = sc_qemu_object_gpio_update;
+    q_import->object_gpio_register_cb = sc_qemu_object_gpio_register_cb;
+    q_import->cpu_get_id = sc_qemu_cpu_get_id;
+}
+
+static void setup_limiter_timer(sc_qemu_init_struct *s, qemu_context *ctx)
+{
+    if (s->max_run_time > 0) {
+        /* Limit the number of instructions QEMU executes when calling the main loop */
+        ctx->limiter_clock = QEMU_CLOCK_VIRTUAL;
+        ctx->max_run_time_ns = s->max_run_time;
+    } else {
+        /* Limit the time we can last into the main loop */
+        ctx->limiter_clock = QEMU_CLOCK_HOST;
+        ctx->max_run_time_ns = SCALE_MS;
+    }
+
+    ctx->deadline = timer_new_ns(ctx->limiter_clock, deadline_cb, ctx);
+    timer_mod(ctx->deadline, qemu_clock_get_ns(ctx->limiter_clock) + ctx->max_run_time_ns);
+}
+
+static void init_main_thread(qemu_context *ctx)
+{
+    qemu_mutex_init(&ctx->mutex_main);
+    qemu_mutex_init(&ctx->mutex_sc);
+
+    qemu_mutex_lock(&ctx->mutex_main);
+    qemu_mutex_lock(&ctx->mutex_sc);
+
+    qemu_thread_create(&ctx->main_thread, "sc-qemu-main", main_thread,
+                       (void*) ctx, QEMU_THREAD_JOINABLE);
+}
+
+
+int qemu_main(int argc, char const * argv[], char **envp);
+
+qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
+{
     char const * qemu_base_argv[] = {
         "",
         "-M", "none",
@@ -168,55 +252,26 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
         qemu_argv[qemu_argc++] = icount_option;
     }
 
-    qemu_context *ctx;
-
-    for (i = 0; i < ctor_count; i++) {
-        ctor = g_array_index(ctor_fns, ctor_fn, i);
-        ctor();
-    }
-    g_array_free(ctor_fns, TRUE);
-    ctor_fns = NULL;
-    ctor_count = 0;
-
+    /* QEMU initialization */
+    call_qemu_ctors();
     qemu_main(qemu_argc, qemu_argv, NULL);
 
-    /* SystemC to QEMU fonctions */
-    s->q_import->cpu_loop = sc_qemu_cpu_loop;
-    s->q_import->map_io = sc_qemu_map_io;
-    s->q_import->map_dmi = sc_qemu_map_dmi;
-    s->q_import->start_gdbserver = sc_qemu_start_gdbserver;
-    s->q_import->char_dev_create = sc_qemu_char_dev_create;
-    s->q_import->char_dev_write = sc_qemu_char_dev_write;
-    s->q_import->char_dev_register_read = sc_qemu_char_dev_register_read;
-    s->q_import->object_new = sc_qemu_object_new;
-    s->q_import->object_property_set_bool = sc_qemu_object_property_set_bool;
-    s->q_import->object_property_set_int = sc_qemu_object_property_set_int;
-    s->q_import->object_property_set_str = sc_qemu_object_property_set_str;
-    s->q_import->object_mmio_map = sc_qemu_object_mmio_map;
-    s->q_import->object_gpio_connect = sc_qemu_object_gpio_connect;
-    s->q_import->object_gpio_update = sc_qemu_object_gpio_update;
-    s->q_import->object_gpio_register_cb = sc_qemu_object_gpio_register_cb;
-    s->q_import->cpu_get_id = sc_qemu_cpu_get_id;
+    init_q_import(s->q_import);
 
+    qemu_context *ctx;
     ctx = g_malloc0(sizeof(qemu_context));
-
     ctx->opaque = s->opaque;
-
-    /* QEMU to SystemC functions */
     memcpy(&(ctx->sysc), &(s->sc_import), sizeof(systemc_import));
 
-    if (s->max_run_time > 0) {
-        /* Limit the number of instructions QEMU executes when calling the main loop */
-        ctx->deadline = timer_new_ns(QEMU_CLOCK_VIRTUAL, deadline_cb, ctx);
-        ctx->max_run_time = s->max_run_time;
-        timer_mod(ctx->deadline, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ctx->max_run_time);
-    }
+    setup_limiter_timer(s, ctx);
 
     if (s->map_whole_as) {
         ctx->root_mr = map_io(ctx, get_system_memory(), 0, ((uint64_t)UINT32_MAX)+1);
     } else {
         ctx->root_mr = get_system_memory();
     }
+
+    init_main_thread(ctx);
 
     return ctx;
 }
@@ -229,5 +284,32 @@ void sc_qemu_do_register_ctor(ctor_fn f)
 
     g_array_append_val(ctor_fns, f);
     ctor_count++;
+}
+
+static QEMU_NORETURN void main_thread_abort(void)
+{
+    for (;;) {
+        qemu_mutex_unlock(&main_thread_ctx->mutex_sc);
+        qemu_mutex_lock(&main_thread_ctx->mutex_main);
+    }
+}
+
+void QEMU_NORETURN __wrap_abort(void);
+void QEMU_NORETURN __wrap_abort(void)
+{
+    main_thread_ctx->main_status = MAIN_ABORT;
+    main_thread_abort();
+}
+
+void QEMU_NORETURN __wrap_exit(int status);
+void QEMU_NORETURN __wrap_exit(int status)
+{
+    if (!status) {
+        main_thread_ctx->main_status = MAIN_EXIT;
+    } else {
+        main_thread_ctx->main_status = MAIN_ABORT;
+    }
+
+    main_thread_abort();
 }
 
