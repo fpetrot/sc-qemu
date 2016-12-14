@@ -11,6 +11,8 @@ enum ScQemuMainLoopStatus {
     MAIN_OK,
     MAIN_EXIT,
     MAIN_ABORT,
+    MAIN_MMIO_READ,
+    MAIN_MMIO_WRITE
 };
 
 struct qemu_context {
@@ -27,6 +29,12 @@ struct qemu_context {
     int64_t last_elapsed;
     QemuThread main_thread;
     QemuMutex mutex_sc, mutex_main;
+
+    /* MMIO */
+    uint64_t mmio_addr;
+    uint64_t mmio_value;
+    unsigned mmio_size;
+    sc_qemu_io_attr mmio_attr;
 };
 
 #endif

@@ -31,24 +31,52 @@ static uint64_t sc_mmio_read(void *opaque, hwaddr offset,
                            unsigned size)
 {
     mmio_ctx *ctx = (mmio_ctx*) opaque;
+#if SYNCHRONOUS_IO
     sc_qemu_io_attr attr;
 
     attr.cpuid = current_cpu->cpu_index;
 
     return ctx->qemu_ctx->sysc.read(ctx->qemu_ctx->opaque,
                                     ctx->base + offset, size, &attr);
+#else
+    qemu_context *qctx = ctx->qemu_ctx;
+
+    qctx->main_status = MAIN_MMIO_READ;
+    qctx->mmio_addr = ctx->base + offset;
+    qctx->mmio_size = size;
+    qctx->mmio_attr.cpuid = current_cpu->cpu_index;
+
+    qemu_mutex_unlock(&qctx->mutex_sc);
+    qemu_mutex_lock(&qctx->mutex_main);
+
+    return qctx->mmio_value;
+#endif
+
 }
 
 static void sc_mmio_write(void *opaque, hwaddr offset,
                         uint64_t value, unsigned size)
 {
     mmio_ctx *ctx = (mmio_ctx*) opaque;
+#if 1
     sc_qemu_io_attr attr;
 
     attr.cpuid = current_cpu->cpu_index;
 
     ctx->qemu_ctx->sysc.write(ctx->qemu_ctx->opaque,
                               ctx->base + offset, value, size, &attr);
+#else
+    qemu_context *qctx = ctx->qemu_ctx;
+
+    qctx->main_status = MAIN_MMIO_WRITE;
+    qctx->mmio_addr = ctx->base + offset;
+    qctx->mmio_value = value;
+    qctx->mmio_size = size;
+    qctx->mmio_attr.cpuid = current_cpu->cpu_index;
+
+    qemu_mutex_unlock(&qctx->mutex_sc);
+    qemu_mutex_lock(&qctx->mutex_main);
+#endif
 }
 
 static const MemoryRegionOps sc_mmio_ops = {
@@ -66,8 +94,21 @@ static void * main_thread(void *arg);
 
 static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed)
 {
-    qemu_mutex_unlock(&ctx->mutex_main);
-    qemu_mutex_lock(&ctx->mutex_sc);
+    do {
+        qemu_mutex_unlock(&ctx->mutex_main);
+        qemu_mutex_lock(&ctx->mutex_sc);
+
+        switch (ctx->main_status) {
+        case MAIN_MMIO_READ:
+            ctx->mmio_value = ctx->sysc.read(ctx->opaque, ctx->mmio_addr, ctx->mmio_size, &ctx->mmio_attr);
+            break;
+        case MAIN_MMIO_WRITE:
+            ctx->sysc.write(ctx->opaque, ctx->mmio_addr, ctx->mmio_value, ctx->mmio_size, &ctx->mmio_attr);
+            break;
+        default:
+            break;
+        }
+    } while (ctx->main_status > MAIN_ABORT);
 
     if (elapsed) {
         *elapsed = ctx->last_elapsed;
