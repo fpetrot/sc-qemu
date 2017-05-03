@@ -31,7 +31,7 @@ static uint64_t sc_mmio_read(void *opaque, hwaddr offset,
                            unsigned size)
 {
     mmio_ctx *ctx = (mmio_ctx*) opaque;
-#if SYNCHRONOUS_IO
+#ifdef SYNCHRONOUS_IO
     sc_qemu_io_attr attr;
 
     attr.cpuid = current_cpu->cpu_index;
@@ -58,7 +58,7 @@ static void sc_mmio_write(void *opaque, hwaddr offset,
                         uint64_t value, unsigned size)
 {
     mmio_ctx *ctx = (mmio_ctx*) opaque;
-#if SYNCHRONOUS_IO
+#ifdef SYNCHRONOUS_IO
     sc_qemu_io_attr attr;
 
     attr.cpuid = current_cpu->cpu_index;
