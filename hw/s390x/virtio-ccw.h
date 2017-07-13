@@ -22,7 +22,11 @@
 #endif
 #include "hw/virtio/virtio-balloon.h"
 #include "hw/virtio/virtio-rng.h"
+#include "hw/virtio/virtio-crypto.h"
 #include "hw/virtio/virtio-bus.h"
+#ifdef CONFIG_VHOST_VSOCK
+#include "hw/virtio/vhost-vsock.h"
+#endif /* CONFIG_VHOST_VSOCK */
 
 #include "hw/s390x/s390_flic.h"
 #include "hw/s390x/css.h"
@@ -42,6 +46,7 @@
 #define CCW_CMD_SET_IND      0x43
 #define CCW_CMD_SET_CONF_IND 0x53
 #define CCW_CMD_READ_VQ_CONF 0x32
+#define CCW_CMD_READ_STATUS  0x72
 #define CCW_CMD_SET_IND_ADAPTER 0x73
 #define CCW_CMD_SET_VIRTIO_REV 0x83
 
@@ -82,8 +87,6 @@ struct VirtioCcwDevice {
     int revision;
     uint32_t max_rev;
     VirtioBusState bus;
-    bool ioeventfd_started;
-    bool ioeventfd_disabled;
     uint32_t flags;
     uint8_t thinint_isc;
     AdapterRoutes routes;
@@ -92,10 +95,11 @@ struct VirtioCcwDevice {
     IndAddr *indicators2;
     IndAddr *summary_indicator;
     uint64_t ind_bit;
+    bool force_revision_1;
 };
 
 /* The maximum virtio revision we support. */
-#define VIRTIO_CCW_MAX_REV 1
+#define VIRTIO_CCW_MAX_REV 2
 static inline int virtio_ccw_rev_max(VirtioCcwDevice *dev)
 {
     return dev->max_rev;
@@ -180,7 +184,17 @@ typedef struct VirtIORNGCcw {
     VirtIORNG vdev;
 } VirtIORNGCcw;
 
-void virtio_ccw_device_update_status(SubchDev *sch);
+/* virtio-crypto-ccw */
+
+#define TYPE_VIRTIO_CRYPTO_CCW "virtio-crypto-ccw"
+#define VIRTIO_CRYPTO_CCW(obj) \
+        OBJECT_CHECK(VirtIOCryptoCcw, (obj), TYPE_VIRTIO_CRYPTO_CCW)
+
+typedef struct VirtIOCryptoCcw {
+    VirtioCcwDevice parent_obj;
+    VirtIOCrypto vdev;
+} VirtIOCryptoCcw;
+
 VirtIODevice *virtio_ccw_get_vdev(SubchDev *sch);
 
 #ifdef CONFIG_VIRTFS
@@ -196,5 +210,17 @@ typedef struct V9fsCCWState {
 } V9fsCCWState;
 
 #endif /* CONFIG_VIRTFS */
+
+#ifdef CONFIG_VHOST_VSOCK
+#define TYPE_VHOST_VSOCK_CCW "vhost-vsock-ccw"
+#define VHOST_VSOCK_CCW(obj) \
+    OBJECT_CHECK(VHostVSockCCWState, (obj), TYPE_VHOST_VSOCK_CCW)
+
+typedef struct VHostVSockCCWState {
+    VirtioCcwDevice parent_obj;
+    VHostVSock vdev;
+} VHostVSockCCWState;
+
+#endif /* CONFIG_VHOST_VSOCK */
 
 #endif

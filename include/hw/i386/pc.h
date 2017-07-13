@@ -13,7 +13,6 @@
 #include "qemu/bitmap.h"
 #include "sysemu/sysemu.h"
 #include "hw/pci/pci.h"
-#include "hw/boards.h"
 #include "hw/compat.h"
 #include "hw/mem/pc-dimm.h"
 #include "hw/mem/nvdimm.h"
@@ -37,6 +36,7 @@
 /**
  * PCMachineState:
  * @acpi_dev: link to ACPI PM device that performs ACPI hotplug handling
+ * @boot_cpus: number of present VCPUs
  */
 struct PCMachineState {
     /*< private >*/
@@ -53,6 +53,7 @@ struct PCMachineState {
     ISADevice *rtc;
     PCIBus *bus;
     FWCfgState *fw_cfg;
+    qemu_irq *gsi;
 
     /* Configuration options: */
     uint64_t max_ram_below_4g;
@@ -61,13 +62,18 @@ struct PCMachineState {
 
     AcpiNVDIMMState acpi_nvdimm_state;
 
+    bool acpi_build_enabled;
+    bool smbus;
+    bool sata;
+    bool pit;
+
     /* RAM information (sizes, addresses, configuration): */
     ram_addr_t below_4g_mem_size, above_4g_mem_size;
 
     /* CPU and apic information: */
     bool apic_xrupt_override;
     unsigned apic_id_limit;
-    CPUArchIdList *possible_cpus;
+    uint16_t boot_cpus;
 
     /* NUMA information: */
     uint64_t numa_nodes;
@@ -84,6 +90,9 @@ struct PCMachineState {
 #define PC_MACHINE_VMPORT           "vmport"
 #define PC_MACHINE_SMM              "smm"
 #define PC_MACHINE_NVDIMM           "nvdimm"
+#define PC_MACHINE_SMBUS            "smbus"
+#define PC_MACHINE_SATA             "sata"
+#define PC_MACHINE_PIT              "pit"
 
 /**
  * PCMachineClass:
@@ -171,7 +180,7 @@ void parallel_hds_isa_init(ISABus *bus, int n);
 
 bool parallel_mm_init(MemoryRegion *address_space,
                       hwaddr base, int it_shift, qemu_irq irq,
-                      CharDriverState *chr);
+                      Chardev *chr);
 
 /* i8259.c */
 
@@ -180,8 +189,6 @@ qemu_irq *i8259_init(ISABus *bus, qemu_irq parent_irq);
 qemu_irq *kvm_i8259_init(ISABus *bus);
 int pic_read_irq(DeviceState *d);
 int pic_get_output(DeviceState *d);
-void hmp_info_pic(Monitor *mon, const QDict *qdict);
-void hmp_info_irq(Monitor *mon, const QDict *qdict);
 
 /* ioapic.c */
 
@@ -215,12 +222,11 @@ void vmmouse_set_data(const uint32_t *data);
 /* pckbd.c */
 #define I8042_A20_LINE "a20"
 
-void i8042_init(qemu_irq kbd_irq, qemu_irq mouse_irq, uint32_t io_base);
 void i8042_mm_init(qemu_irq kbd_irq, qemu_irq mouse_irq,
                    MemoryRegion *region, ram_addr_t size,
                    hwaddr mask);
 void i8042_isa_mouse_fake_event(void *opaque);
-void i8042_setup_a20_line(ISADevice *dev, qemu_irq *a20_out);
+void i8042_setup_a20_line(ISADevice *dev, qemu_irq a20_out);
 
 /* pc.c */
 extern int fd_bootchk;
@@ -259,6 +265,7 @@ void pc_basic_device_init(ISABus *isa_bus, qemu_irq *gsi,
                           ISADevice **rtc_state,
                           bool create_fdctrl,
                           bool no_vmport,
+                          bool has_pit,
                           uint32_t hpet_irqs);
 void pc_init_ne2k_isa(ISABus *bus, NICInfo *nd);
 void pc_cmos_init(PCMachineState *pcms,
@@ -283,7 +290,6 @@ int cmos_get_fd_drive_type(FloppyDriveType fd0);
 I2CBus *piix4_pm_init(PCIBus *bus, int devfn, uint32_t smb_io_base,
                       qemu_irq sci_irq, qemu_irq smi_irq,
                       int smm_enabled, DeviceState **piix4_pm);
-void piix4_smbus_register_device(SMBusDevice *dev, uint8_t addr);
 
 /* hpet.c */
 extern int no_hpet;
@@ -354,7 +360,7 @@ uint16_t pvpanic_port(void);
 
 /* acpi-build.c */
 void pc_madt_cpu_entry(AcpiDeviceIf *adev, int uid,
-                       CPUArchIdList *apic_ids, GArray *entry);
+                       const CPUArchIdList *apic_ids, GArray *entry);
 
 /* e820 types */
 #define E820_RAM        1
@@ -366,6 +372,62 @@ void pc_madt_cpu_entry(AcpiDeviceIf *adev, int uid,
 int e820_add_entry(uint64_t, uint64_t, uint32_t);
 int e820_get_num_entries(void);
 bool e820_get_entry(int, uint32_t, uint64_t *, uint64_t *);
+
+#define PC_COMPAT_2_8 \
+    HW_COMPAT_2_8 \
+    {\
+        .driver   = "kvmclock",\
+        .property = "x-mach-use-reliable-get-clock",\
+        .value    = "off",\
+    },\
+    {\
+        .driver   = "ICH9-LPC",\
+        .property = "x-smi-broadcast",\
+        .value    = "off",\
+    },\
+    {\
+        .driver   = TYPE_X86_CPU,\
+        .property = "vmware-cpuid-freq",\
+        .value    = "off",\
+    },\
+    {\
+        .driver   = "Haswell-" TYPE_X86_CPU,\
+        .property = "stepping",\
+        .value    = "1",\
+    },
+
+#define PC_COMPAT_2_7 \
+    HW_COMPAT_2_7 \
+    {\
+        .driver   = TYPE_X86_CPU,\
+        .property = "l3-cache",\
+        .value    = "off",\
+    },\
+    {\
+        .driver   = TYPE_X86_CPU,\
+        .property = "full-cpuid-auto-level",\
+        .value    = "off",\
+    },\
+    {\
+        .driver   = "Opteron_G3" "-" TYPE_X86_CPU,\
+        .property = "family",\
+        .value    = "15",\
+    },\
+    {\
+        .driver   = "Opteron_G3" "-" TYPE_X86_CPU,\
+        .property = "model",\
+        .value    = "6",\
+    },\
+    {\
+        .driver   = "Opteron_G3" "-" TYPE_X86_CPU,\
+        .property = "stepping",\
+        .value    = "1",\
+    },\
+    {\
+        .driver   = "isa-pcspk",\
+        .property = "migrate",\
+        .value    = "off",\
+    },
 
 #define PC_COMPAT_2_6 \
     HW_COMPAT_2_6 \
@@ -394,7 +456,6 @@ bool e820_get_entry(int, uint32_t, uint64_t *, uint64_t *);
     },
 
 #define PC_COMPAT_2_5 \
-    PC_COMPAT_2_6 \
     HW_COMPAT_2_5
 
 /* Helper for setting model-id for CPU models that changed model-id
@@ -567,6 +628,10 @@ bool e820_get_entry(int, uint32_t, uint64_t *, uint64_t *);
         .driver   = "Broadwell-noTSX" "-" TYPE_X86_CPU,\
         .property = "xlevel",\
         .value    = stringify(0x8000000a),\
+    },{\
+        .driver = TYPE_X86_CPU,\
+        .property = "kvm-no-smi-migration",\
+        .value    = "on",\
     },
 
 #define PC_COMPAT_2_2 \
@@ -903,7 +968,6 @@ bool e820_get_entry(int, uint32_t, uint64_t *, uint64_t *);
     { \
         MachineClass *mc = MACHINE_CLASS(oc); \
         optsfn(mc); \
-        mc->name = namestr; \
         mc->init = initfn; \
     } \
     static const TypeInfo pc_machine_type_##suffix = { \

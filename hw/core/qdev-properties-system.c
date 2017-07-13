@@ -73,14 +73,19 @@ static void parse_drive(DeviceState *dev, const char *str, void **ptr,
 {
     BlockBackend *blk;
     bool blk_created = false;
+    int ret;
 
     blk = blk_by_name(str);
     if (!blk) {
         BlockDriverState *bs = bdrv_lookup_bs(NULL, str, NULL);
         if (bs) {
-            blk = blk_new();
-            blk_insert_bs(blk, bs);
+            blk = blk_new(0, BLK_PERM_ALL);
             blk_created = true;
+
+            ret = blk_insert_bs(blk, bs, errp);
+            if (ret < 0) {
+                goto fail;
+            }
         }
     }
     if (!blk) {
@@ -119,8 +124,12 @@ static void release_drive(Object *obj, const char *name, void *opaque)
     BlockBackend **ptr = qdev_get_prop_ptr(dev, prop);
 
     if (*ptr) {
+        AioContext *ctx = blk_get_aio_context(*ptr);
+
+        aio_context_acquire(ctx);
         blockdev_auto_del(*ptr);
         blk_detach_dev(*ptr, dev);
+        aio_context_release(ctx);
     }
 }
 
@@ -160,55 +169,63 @@ PropertyInfo qdev_prop_drive = {
 
 /* --- character device --- */
 
-static void parse_chr(DeviceState *dev, const char *str, void **ptr,
-                      const char *propname, Error **errp)
+static void get_chr(Object *obj, Visitor *v, const char *name, void *opaque,
+                    Error **errp)
 {
-    CharDriverState *chr = qemu_chr_find(str);
-    if (chr == NULL) {
+    DeviceState *dev = DEVICE(obj);
+    CharBackend *be = qdev_get_prop_ptr(dev, opaque);
+    char *p;
+
+    p = g_strdup(be->chr && be->chr->label ? be->chr->label : "");
+    visit_type_str(v, name, &p, errp);
+    g_free(p);
+}
+
+static void set_chr(Object *obj, Visitor *v, const char *name, void *opaque,
+                    Error **errp)
+{
+    DeviceState *dev = DEVICE(obj);
+    Error *local_err = NULL;
+    Property *prop = opaque;
+    CharBackend *be = qdev_get_prop_ptr(dev, prop);
+    Chardev *s;
+    char *str;
+
+    if (dev->realized) {
+        qdev_prop_set_after_realize(dev, name, errp);
+        return;
+    }
+
+    visit_type_str(v, name, &str, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+        return;
+    }
+
+    if (!*str) {
+        g_free(str);
+        be->chr = NULL;
+        return;
+    }
+
+    s = qemu_chr_find(str);
+    if (s == NULL) {
         error_setg(errp, "Property '%s.%s' can't find value '%s'",
-                   object_get_typename(OBJECT(dev)), propname, str);
-        return;
+                   object_get_typename(obj), prop->name, str);
+    } else if (!qemu_chr_fe_init(be, s, errp)) {
+        error_prepend(errp, "Property '%s.%s' can't take value '%s': ",
+                      object_get_typename(obj), prop->name, str);
     }
-    if (qemu_chr_fe_claim(chr) != 0) {
-        error_setg(errp, "Property '%s.%s' can't take value '%s', it's in use",
-                  object_get_typename(OBJECT(dev)), propname, str);
-        return;
-    }
-    *ptr = chr;
+    g_free(str);
 }
 
 static void release_chr(Object *obj, const char *name, void *opaque)
 {
     DeviceState *dev = DEVICE(obj);
     Property *prop = opaque;
-    CharDriverState **ptr = qdev_get_prop_ptr(dev, prop);
-    CharDriverState *chr = *ptr;
+    CharBackend *be = qdev_get_prop_ptr(dev, prop);
 
-    if (chr) {
-        qemu_chr_add_handlers(chr, NULL, NULL, NULL, NULL);
-        qemu_chr_fe_release(chr);
-    }
-}
-
-
-static char *print_chr(void *ptr)
-{
-    CharDriverState *chr = ptr;
-    const char *val = chr->label ? chr->label : "";
-
-    return g_strdup(val);
-}
-
-static void get_chr(Object *obj, Visitor *v, const char *name, void *opaque,
-                    Error **errp)
-{
-    get_pointer(obj, v, opaque, print_chr, name, errp);
-}
-
-static void set_chr(Object *obj, Visitor *v, const char *name, void *opaque,
-                    Error **errp)
-{
-    set_pointer(obj, v, opaque, parse_chr, name, errp);
+    qemu_chr_fe_deinit(be);
 }
 
 PropertyInfo qdev_prop_chr = {
@@ -403,7 +420,7 @@ void qdev_prop_set_drive(DeviceState *dev, const char *name,
 }
 
 void qdev_prop_set_chr(DeviceState *dev, const char *name,
-                       CharDriverState *value)
+                       Chardev *value)
 {
     assert(!value || value->label);
     object_property_set_str(OBJECT(dev),

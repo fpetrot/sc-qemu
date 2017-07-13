@@ -11,11 +11,15 @@
 
 #include "hw/qdev.h"
 #include "hw/cpu/core.h"
-#include "target-ppc/cpu-qom.h"
+#include "target/ppc/cpu-qom.h"
 
 #define TYPE_SPAPR_CPU_CORE "spapr-cpu-core"
 #define SPAPR_CPU_CORE(obj) \
     OBJECT_CHECK(sPAPRCPUCore, (obj), TYPE_SPAPR_CPU_CORE)
+#define SPAPR_CPU_CORE_CLASS(klass) \
+    OBJECT_CLASS_CHECK(sPAPRCPUCoreClass, (klass), TYPE_SPAPR_CPU_CORE)
+#define SPAPR_CPU_CORE_GET_CLASS(obj) \
+     OBJECT_GET_CLASS(sPAPRCPUCoreClass, (obj), TYPE_SPAPR_CPU_CORE)
 
 typedef struct sPAPRCPUCore {
     /*< private >*/
@@ -23,14 +27,13 @@ typedef struct sPAPRCPUCore {
 
     /*< public >*/
     void *threads;
-    ObjectClass *cpu_class;
 } sPAPRCPUCore;
 
-void spapr_core_pre_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
-                         Error **errp);
+typedef struct sPAPRCPUCoreClass {
+    DeviceClass parent_class;
+    ObjectClass *cpu_class;
+} sPAPRCPUCoreClass;
+
 char *spapr_get_cpu_core_type(const char *model);
-void spapr_core_plug(HotplugHandler *hotplug_dev, DeviceState *dev,
-                     Error **errp);
-void spapr_core_unplug(HotplugHandler *hotplug_dev, DeviceState *dev,
-                       Error **errp);
+void spapr_cpu_core_class_init(ObjectClass *oc, void *data);
 #endif

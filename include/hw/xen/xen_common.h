@@ -18,7 +18,7 @@
 #include "hw/xen/xen.h"
 #include "hw/pci/pci.h"
 #include "qemu/queue.h"
-#include "trace.h"
+#include "hw/xen/trace.h"
 
 /*
  * We don't support Xen prior to 4.2.0.
@@ -422,6 +422,20 @@ static inline int xen_domain_create(xc_interface *xc, uint32_t ssidref,
     return xc_domain_create(xc, ssidref, handle, flags, pdomid, NULL);
 }
 #endif
+#endif
+
+/* Xen before 4.8 */
+
+#if CONFIG_XEN_CTRL_INTERFACE_VERSION < 480
+
+
+typedef void *xengnttab_grant_copy_segment_t;
+
+static inline int xengnttab_grant_copy(xengnttab_handle *xgt, uint32_t count,
+                                       xengnttab_grant_copy_segment_t *segs)
+{
+    return -ENOSYS;
+}
 #endif
 
 #endif /* QEMU_HW_XEN_COMMON_H */

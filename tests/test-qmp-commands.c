@@ -4,9 +4,11 @@
 #include "test-qmp-commands.h"
 #include "qapi/qmp/dispatch.h"
 #include "qemu/module.h"
-#include "qapi/qmp-input-visitor.h"
+#include "qapi/qobject-input-visitor.h"
 #include "tests/test-qapi-types.h"
 #include "tests/test-qapi-visit.h"
+
+static QmpCommandList qmp_commands;
 
 void qmp_user_def_cmd(Error **errp)
 {
@@ -94,7 +96,7 @@ static void test_dispatch_cmd(void)
 
     qdict_put_obj(req, "execute", QOBJECT(qstring_from_str("user_def_cmd")));
 
-    resp = qmp_dispatch(QOBJECT(req));
+    resp = qmp_dispatch(&qmp_commands, QOBJECT(req));
     assert(resp != NULL);
     assert(!qdict_haskey(qobject_to_qdict(resp), "error"));
 
@@ -106,11 +108,26 @@ static void test_dispatch_cmd(void)
 static void test_dispatch_cmd_failure(void)
 {
     QDict *req = qdict_new();
+    QDict *args = qdict_new();
     QObject *resp;
 
     qdict_put_obj(req, "execute", QOBJECT(qstring_from_str("user_def_cmd2")));
 
-    resp = qmp_dispatch(QOBJECT(req));
+    resp = qmp_dispatch(&qmp_commands, QOBJECT(req));
+    assert(resp != NULL);
+    assert(qdict_haskey(qobject_to_qdict(resp), "error"));
+
+    qobject_decref(resp);
+    QDECREF(req);
+
+    /* check that with extra arguments it throws an error */
+    req = qdict_new();
+    qdict_put(args, "a", qint_from_int(66));
+    qdict_put(req, "arguments", args);
+
+    qdict_put_obj(req, "execute", QOBJECT(qstring_from_str("user_def_cmd")));
+
+    resp = qmp_dispatch(&qmp_commands, QOBJECT(req));
     assert(resp != NULL);
     assert(qdict_haskey(qobject_to_qdict(resp), "error"));
 
@@ -124,7 +141,7 @@ static QObject *test_qmp_dispatch(QDict *req)
     QDict *resp;
     QObject *ret;
 
-    resp_obj = qmp_dispatch(QOBJECT(req));
+    resp_obj = qmp_dispatch(&qmp_commands, QOBJECT(req));
     assert(resp_obj);
     resp = qobject_to_qdict(resp_obj);
     assert(resp && !qdict_haskey(resp, "error"));
@@ -229,7 +246,7 @@ static void test_dealloc_partial(void)
         ud2_dict = qdict_new();
         qdict_put_obj(ud2_dict, "string0", QOBJECT(qstring_from_str(text)));
 
-        v = qmp_input_visitor_new(QOBJECT(ud2_dict), true);
+        v = qobject_input_visitor_new(QOBJECT(ud2_dict));
         visit_type_UserDefTwo(v, NULL, &ud2, &err);
         visit_free(v);
         QDECREF(ud2_dict);
@@ -258,7 +275,7 @@ int main(int argc, char **argv)
     g_test_add_func("/0.15/dealloc_types", test_dealloc_types);
     g_test_add_func("/0.15/dealloc_partial", test_dealloc_partial);
 
-    module_call_init(MODULE_INIT_QAPI);
+    test_qmp_init_marshal(&qmp_commands);
     g_test_run();
 
     return 0;

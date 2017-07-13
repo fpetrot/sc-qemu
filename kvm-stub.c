@@ -31,6 +31,7 @@ bool kvm_gsi_direct_mapping;
 bool kvm_allowed;
 bool kvm_readonly_mem_allowed;
 bool kvm_ioeventfd_any_length_allowed;
+bool kvm_msi_use_devid;
 
 int kvm_destroy_vcpu(CPUState *cpu)
 {
@@ -73,10 +74,6 @@ int kvm_has_many_ioeventfds(void)
     return 0;
 }
 
-void kvm_setup_guest_memory(void *start, size_t size)
-{
-}
-
 int kvm_update_guest_debug(CPUState *cpu, unsigned long reinject_trap)
 {
     return -ENOSYS;
@@ -97,13 +94,6 @@ int kvm_remove_breakpoint(CPUState *cpu, target_ulong addr,
 void kvm_remove_all_breakpoints(CPUState *cpu)
 {
 }
-
-#ifndef _WIN32
-int kvm_set_signal_mask(CPUState *cpu, const sigset_t *sigset)
-{
-    abort();
-}
-#endif
 
 int kvm_on_sigbus_vcpu(CPUState *cpu, int code, void *addr)
 {
@@ -159,5 +149,10 @@ int kvm_irqchip_remove_irqfd_notifier_gsi(KVMState *s, EventNotifier *n,
 bool kvm_has_free_slot(MachineState *ms)
 {
     return false;
+}
+
+void kvm_init_cpu_signals(CPUState *cpu)
+{
+    abort();
 }
 #endif

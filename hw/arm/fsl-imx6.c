@@ -187,13 +187,13 @@ static void fsl_imx6_realize(DeviceState *dev, Error **errp)
         };
 
         if (i < MAX_SERIAL_PORTS) {
-            CharDriverState *chr;
+            Chardev *chr;
 
             chr = serial_hds[i];
 
             if (!chr) {
                 char *label = g_strdup_printf("imx6.uart%d", i + 1);
-                chr = qemu_chr_new(label, "null", NULL);
+                chr = qemu_chr_new(label, "null");
                 g_free(label);
                 serial_hds[i] = chr;
             }

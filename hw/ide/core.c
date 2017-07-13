@@ -882,15 +882,15 @@ static void ide_dma_cb(void *opaque, int ret)
     switch (s->dma_cmd) {
     case IDE_DMA_READ:
         s->bus->dma->aiocb = dma_blk_read(s->blk, &s->sg, offset,
-                                          ide_dma_cb, s);
+                                          BDRV_SECTOR_SIZE, ide_dma_cb, s);
         break;
     case IDE_DMA_WRITE:
         s->bus->dma->aiocb = dma_blk_write(s->blk, &s->sg, offset,
-                                           ide_dma_cb, s);
+                                           BDRV_SECTOR_SIZE, ide_dma_cb, s);
         break;
     case IDE_DMA_TRIM:
         s->bus->dma->aiocb = dma_blk_io(blk_get_aio_context(s->blk),
-                                        &s->sg, offset,
+                                        &s->sg, offset, BDRV_SECTOR_SIZE,
                                         ide_issue_trim, s->blk, ide_dma_cb, s,
                                         DMA_DIRECTION_TO_DEVICE);
         break;
@@ -908,7 +908,7 @@ eot:
 
 static void ide_sector_start_dma(IDEState *s, enum ide_dma_cmd dma_cmd)
 {
-    s->status = READY_STAT | SEEK_STAT | DRQ_STAT | BUSY_STAT;
+    s->status = READY_STAT | SEEK_STAT | DRQ_STAT;
     s->io_buffer_size = 0;
     s->dma_cmd = dma_cmd;
 
@@ -1120,7 +1120,7 @@ static void ide_cfata_metadata_write(IDEState *s)
 }
 
 /* called when the inserted state of the media has changed */
-static void ide_cd_change_cb(void *opaque, bool load)
+static void ide_cd_change_cb(void *opaque, bool load, Error **errp)
 {
     IDEState *s = opaque;
     uint64_t nb_sectors;
@@ -2582,7 +2582,7 @@ static void ide_restart_cb(void *opaque, int running, RunState state)
 void ide_register_restart_cb(IDEBus *bus)
 {
     if (bus->dma->ops->restart_dma) {
-        qemu_add_vm_change_state_handler(ide_restart_cb, bus);
+        bus->vmstate = qemu_add_vm_change_state_handler(ide_restart_cb, bus);
     }
 }
 
@@ -2603,6 +2603,14 @@ void ide_init2(IDEBus *bus, qemu_irq irq)
     bus->dma = &ide_dma_nop;
 }
 
+void ide_exit(IDEState *s)
+{
+    timer_del(s->sector_write_timer);
+    timer_free(s->sector_write_timer);
+    qemu_vfree(s->smart_selftest_data);
+    qemu_vfree(s->io_buffer);
+}
+
 static const MemoryRegionPortio ide_portio_list[] = {
     { 0, 8, 1, .read = ide_ioport_read, .write = ide_ioport_write },
     { 0, 1, 2, .read = ide_data_readw, .write = ide_data_writew },
@@ -2619,10 +2627,12 @@ void ide_init_ioport(IDEBus *bus, ISADevice *dev, int iobase, int iobase2)
 {
     /* ??? Assume only ISA and PCI configurations, and that the PCI-ISA
        bridge has been setup properly to always register with ISA.  */
-    isa_register_portio_list(dev, iobase, ide_portio_list, bus, "ide");
+    isa_register_portio_list(dev, &bus->portio_list,
+                             iobase, ide_portio_list, bus, "ide");
 
     if (iobase2) {
-        isa_register_portio_list(dev, iobase2, ide_portio2_list, bus, "ide");
+        isa_register_portio_list(dev, &bus->portio2_list,
+                                 iobase2, ide_portio2_list, bus, "ide");
     }
 }
 
@@ -2838,23 +2848,6 @@ const VMStateDescription vmstate_ide_bus = {
 void ide_drive_get(DriveInfo **hd, int n)
 {
     int i;
-    int highest_bus = drive_get_max_bus(IF_IDE) + 1;
-    int max_devs = drive_get_max_devs(IF_IDE);
-    int n_buses = max_devs ? (n / max_devs) : n;
-
-    /*
-     * Note: The number of actual buses available is not known.
-     * We compute this based on the size of the DriveInfo* array, n.
-     * If it is less than max_devs * <num_real_buses>,
-     * We will stop looking for drives prematurely instead of overfilling
-     * the array.
-     */
-
-    if (highest_bus > n_buses) {
-        error_report("Too many IDE buses defined (%d > %d)",
-                     highest_bus, n_buses);
-        exit(1);
-    }
 
     for (i = 0; i < n; i++) {
         hd[i] = drive_get_by_index(IF_IDE, i);

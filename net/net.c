@@ -690,9 +690,13 @@ static ssize_t nc_sendv_compat(NetClientState *nc, const struct iovec *iov,
         buffer = iov[0].iov_base;
         offset = iov[0].iov_len;
     } else {
-        buf = g_new(uint8_t, NET_BUFSIZE);
+        offset = iov_size(iov, iovcnt);
+        if (offset > NET_BUFSIZE) {
+            return -1;
+        }
+        buf = g_malloc(offset);
         buffer = buf;
-        offset = iov_to_buf(iov, iovcnt, 0, buf, NET_BUFSIZE);
+        offset = iov_to_buf(iov, iovcnt, 0, buf, offset);
     }
 
     if (flags & QEMU_NET_PACKET_FLAG_RAW && nc->info->receive_raw) {
@@ -966,6 +970,7 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
     const Netdev *netdev;
     const char *name;
     NetClientState *peer = NULL;
+    static bool vlan_warned;
 
     if (is_netdev) {
         netdev = object;
@@ -988,47 +993,47 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
 
         /* Map the old options to the new flat type */
         switch (opts->type) {
-        case NET_LEGACY_OPTIONS_KIND_NONE:
+        case NET_LEGACY_OPTIONS_TYPE_NONE:
             return 0; /* nothing to do */
-        case NET_LEGACY_OPTIONS_KIND_NIC:
+        case NET_LEGACY_OPTIONS_TYPE_NIC:
             legacy.type = NET_CLIENT_DRIVER_NIC;
-            legacy.u.nic = *opts->u.nic.data;
+            legacy.u.nic = opts->u.nic;
             break;
-        case NET_LEGACY_OPTIONS_KIND_USER:
+        case NET_LEGACY_OPTIONS_TYPE_USER:
             legacy.type = NET_CLIENT_DRIVER_USER;
-            legacy.u.user = *opts->u.user.data;
+            legacy.u.user = opts->u.user;
             break;
-        case NET_LEGACY_OPTIONS_KIND_TAP:
+        case NET_LEGACY_OPTIONS_TYPE_TAP:
             legacy.type = NET_CLIENT_DRIVER_TAP;
-            legacy.u.tap = *opts->u.tap.data;
+            legacy.u.tap = opts->u.tap;
             break;
-        case NET_LEGACY_OPTIONS_KIND_L2TPV3:
+        case NET_LEGACY_OPTIONS_TYPE_L2TPV3:
             legacy.type = NET_CLIENT_DRIVER_L2TPV3;
-            legacy.u.l2tpv3 = *opts->u.l2tpv3.data;
+            legacy.u.l2tpv3 = opts->u.l2tpv3;
             break;
-        case NET_LEGACY_OPTIONS_KIND_SOCKET:
+        case NET_LEGACY_OPTIONS_TYPE_SOCKET:
             legacy.type = NET_CLIENT_DRIVER_SOCKET;
-            legacy.u.socket = *opts->u.socket.data;
+            legacy.u.socket = opts->u.socket;
             break;
-        case NET_LEGACY_OPTIONS_KIND_VDE:
+        case NET_LEGACY_OPTIONS_TYPE_VDE:
             legacy.type = NET_CLIENT_DRIVER_VDE;
-            legacy.u.vde = *opts->u.vde.data;
+            legacy.u.vde = opts->u.vde;
             break;
-        case NET_LEGACY_OPTIONS_KIND_DUMP:
+        case NET_LEGACY_OPTIONS_TYPE_DUMP:
             legacy.type = NET_CLIENT_DRIVER_DUMP;
-            legacy.u.dump = *opts->u.dump.data;
+            legacy.u.dump = opts->u.dump;
             break;
-        case NET_LEGACY_OPTIONS_KIND_BRIDGE:
+        case NET_LEGACY_OPTIONS_TYPE_BRIDGE:
             legacy.type = NET_CLIENT_DRIVER_BRIDGE;
-            legacy.u.bridge = *opts->u.bridge.data;
+            legacy.u.bridge = opts->u.bridge;
             break;
-        case NET_LEGACY_OPTIONS_KIND_NETMAP:
+        case NET_LEGACY_OPTIONS_TYPE_NETMAP:
             legacy.type = NET_CLIENT_DRIVER_NETMAP;
-            legacy.u.netmap = *opts->u.netmap.data;
+            legacy.u.netmap = opts->u.netmap;
             break;
-        case NET_LEGACY_OPTIONS_KIND_VHOST_USER:
+        case NET_LEGACY_OPTIONS_TYPE_VHOST_USER:
             legacy.type = NET_CLIENT_DRIVER_VHOST_USER;
-            legacy.u.vhost_user = *opts->u.vhost_user.data;
+            legacy.u.vhost_user = opts->u.vhost_user;
             break;
         default:
             abort();
@@ -1043,8 +1048,13 @@ static int net_client_init1(const void *object, bool is_netdev, Error **errp)
 
         /* Do not add to a vlan if it's a nic with a netdev= parameter. */
         if (netdev->type != NET_CLIENT_DRIVER_NIC ||
-            !opts->u.nic.data->has_netdev) {
+            !opts->u.nic.has_netdev) {
             peer = net_hub_add_port(net->has_vlan ? net->vlan : 0, NULL);
+        }
+
+        if (net->has_vlan && !vlan_warned) {
+            error_report("'vlan' is deprecated. Please use 'netdev' instead.");
+            vlan_warned = true;
         }
     }
 
@@ -1179,6 +1189,7 @@ void hmp_host_net_remove(Monitor *mon, const QDict *qdict)
 
     qemu_del_net_client(nc->peer);
     qemu_del_net_client(nc);
+    qemu_opts_del(qemu_opts_find(qemu_find_opts("net"), device));
 }
 
 void netdev_add(QemuOpts *opts, Error **errp)
@@ -1648,9 +1659,8 @@ int net_fill_rstate(SocketReadState *rs, const uint8_t *buf, int size)
             if (rs->index >= rs->packet_len) {
                 rs->index = 0;
                 rs->state = 0;
-                if (rs->finalize) {
-                    rs->finalize(rs);
-                }
+                assert(rs->finalize);
+                rs->finalize(rs);
             }
             break;
         }

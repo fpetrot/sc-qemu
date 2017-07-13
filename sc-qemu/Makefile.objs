@@ -1,2 +1,2 @@
 obj-y += sc-qemu.o
-obj-y += sc-object.o sc-qemu-char-dev.o
+obj-y += sc-object.o

@@ -249,6 +249,8 @@ static const int tcg_target_call_oarg_regs[] = {
 #define STWA       (INSN_OP(3) | INSN_OP3(0x14))
 #define STXA       (INSN_OP(3) | INSN_OP3(0x1e))
 
+#define MEMBAR     (INSN_OP(2) | INSN_OP3(0x28) | INSN_RS1(15) | (1 << 13))
+
 #ifndef ASI_PRIMARY_LITTLE
 #define ASI_PRIMARY_LITTLE 0x88
 #endif
@@ -317,12 +319,10 @@ static void patch_reloc(tcg_insn_unit *code_ptr, int type,
 }
 
 /* parse target specific constraints */
-static int target_parse_constraint(TCGArgConstraint *ct, const char **pct_str)
+static const char *target_parse_constraint(TCGArgConstraint *ct,
+                                           const char *ct_str, TCGType type)
 {
-    const char *ct_str;
-
-    ct_str = *pct_str;
-    switch (ct_str[0]) {
+    switch (*ct_str++) {
     case 'r':
         ct->ct |= TCG_CT_REG;
         tcg_regset_set32(ct->u.regs, 0, 0xffffffff);
@@ -358,11 +358,9 @@ static int target_parse_constraint(TCGArgConstraint *ct, const char **pct_str)
         ct->ct |= TCG_CT_CONST_ZERO;
         break;
     default:
-        return -1;
+        return NULL;
     }
-    ct_str++;
-    *pct_str = ct_str;
-    return 0;
+    return ct_str;
 }
 
 /* test if a constant matches the constraint */
@@ -835,9 +833,38 @@ static void tcg_out_call(TCGContext *s, tcg_insn_unit *dest)
     tcg_out_nop(s);
 }
 
+static void tcg_out_mb(TCGContext *s, TCGArg a0)
+{
+    /* Note that the TCG memory order constants mirror the Sparc MEMBAR.  */
+    tcg_out32(s, MEMBAR | (a0 & TCG_MO_ALL));
+}
+
 #ifdef CONFIG_SOFTMMU
 static tcg_insn_unit *qemu_ld_trampoline[16];
 static tcg_insn_unit *qemu_st_trampoline[16];
+
+static void emit_extend(TCGContext *s, TCGReg r, int op)
+{
+    /* Emit zero extend of 8, 16 or 32 bit data as
+     * required by the MO_* value op; do nothing for 64 bit.
+     */
+    switch (op & MO_SIZE) {
+    case MO_8:
+        tcg_out_arithi(s, r, r, 0xff, ARITH_AND);
+        break;
+    case MO_16:
+        tcg_out_arithi(s, r, r, 16, SHIFT_SLL);
+        tcg_out_arithi(s, r, r, 16, SHIFT_SRL);
+        break;
+    case MO_32:
+        if (SPARC64) {
+            tcg_out_arith(s, r, r, 0, SHIFT_SRL);
+        }
+        break;
+    case MO_64:
+        break;
+    }
+}
 
 static void build_trampolines(TCGContext *s)
 {
@@ -906,6 +933,7 @@ static void build_trampolines(TCGContext *s)
         qemu_st_trampoline[i] = s->code_ptr;
 
         if (SPARC64) {
+            emit_extend(s, TCG_REG_O2, i);
             ra = TCG_REG_O4;
         } else {
             ra = TCG_REG_O1;
@@ -921,6 +949,7 @@ static void build_trampolines(TCGContext *s)
                 tcg_out_arithi(s, ra, ra + 1, 32, SHIFT_SRLX);
                 ra += 2;
             } else {
+                emit_extend(s, ra, i);
                 ra += 1;
             }
             /* Skip the oi argument.  */
@@ -996,19 +1025,25 @@ static void tcg_target_qemu_prologue(TCGContext *s)
    is in the returned register, maybe %o0.  The TLB addend is in %o1.  */
 
 static TCGReg tcg_out_tlb_load(TCGContext *s, TCGReg addr, int mem_index,
-                               TCGMemOp s_bits, int which)
+                               TCGMemOp opc, int which)
 {
     const TCGReg r0 = TCG_REG_O0;
     const TCGReg r1 = TCG_REG_O1;
     const TCGReg r2 = TCG_REG_O2;
+    unsigned s_bits = opc & MO_SIZE;
+    unsigned a_bits = get_alignment_bits(opc);
     int tlb_ofs;
 
     /* Shift the page number down.  */
     tcg_out_arithi(s, r1, addr, TARGET_PAGE_BITS, SHIFT_SRL);
 
-    /* Mask out the page offset, except for the required alignment.  */
+    /* Mask out the page offset, except for the required alignment.
+       We don't support unaligned accesses.  */
+    if (a_bits < s_bits) {
+        a_bits = s_bits;
+    }
     tcg_out_movi(s, TCG_TYPE_TL, TCG_REG_T1,
-                 TARGET_PAGE_MASK | ((1 << s_bits) - 1));
+                 TARGET_PAGE_MASK | ((1 << a_bits) - 1));
 
     /* Mask the tlb index.  */
     tcg_out_arithi(s, r1, r1, CPU_TLB_SIZE - 1, ARITH_AND);
@@ -1087,7 +1122,7 @@ static void tcg_out_qemu_ld(TCGContext *s, TCGReg data, TCGReg addr,
     tcg_insn_unit *func;
     tcg_insn_unit *label_ptr;
 
-    addrz = tcg_out_tlb_load(s, addr, memi, memop & MO_SIZE,
+    addrz = tcg_out_tlb_load(s, addr, memi, memop,
                              offsetof(CPUTLBEntry, addr_read));
 
     /* The fast path is exactly one insn.  Thus we can perform the
@@ -1109,7 +1144,7 @@ static void tcg_out_qemu_ld(TCGContext *s, TCGReg data, TCGReg addr,
         /* Skip the high-part; we'll perform the extract in the trampoline.  */
         param++;
     }
-    tcg_out_mov(s, TCG_TYPE_REG, param++, addr);
+    tcg_out_mov(s, TCG_TYPE_REG, param++, addrz);
 
     /* We use the helpers to extend SB and SW data, leaving the case
        of SL needing explicit extending below.  */
@@ -1169,7 +1204,7 @@ static void tcg_out_qemu_st(TCGContext *s, TCGReg data, TCGReg addr,
     tcg_insn_unit *func;
     tcg_insn_unit *label_ptr;
 
-    addrz = tcg_out_tlb_load(s, addr, memi, memop & MO_SIZE,
+    addrz = tcg_out_tlb_load(s, addr, memi, memop,
                              offsetof(CPUTLBEntry, addr_write));
 
     /* The fast path is exactly one insn.  Thus we can perform the entire
@@ -1189,7 +1224,7 @@ static void tcg_out_qemu_st(TCGContext *s, TCGReg data, TCGReg addr,
         /* Skip the high-part; we'll perform the extract in the trampoline.  */
         param++;
     }
-    tcg_out_mov(s, TCG_TYPE_REG, param++, addr);
+    tcg_out_mov(s, TCG_TYPE_REG, param++, addrz);
     if (!SPARC64 && (memop & MO_SIZE) == MO_64) {
         /* Skip the high-part; we'll perform the extract in the trampoline.  */
         param++;
@@ -1460,6 +1495,10 @@ static void tcg_out_op(TCGContext *s, TCGOpcode opc,
 	tcg_out_arithc(s, a0, TCG_REG_G0, a1, const_args[1], c);
 	break;
 
+    case INDEX_op_mb:
+        tcg_out_mb(s, a0);
+        break;
+
     case INDEX_op_mov_i32:  /* Always emitted via tcg_out_mov.  */
     case INDEX_op_mov_i64:
     case INDEX_op_movi_i32: /* Always emitted via tcg_out_movi.  */
@@ -1561,8 +1600,21 @@ static const TCGTargetOpDef sparc_op_defs[] = {
     { INDEX_op_qemu_st_i32, { "sZ", "A" } },
     { INDEX_op_qemu_st_i64, { "SZ", "A" } },
 
+    { INDEX_op_mb, { } },
     { -1 },
 };
+
+static const TCGTargetOpDef *tcg_target_op_def(TCGOpcode op)
+{
+    int i, n = ARRAY_SIZE(sparc_op_defs);
+
+    for (i = 0; i < n; ++i) {
+        if (sparc_op_defs[i].op == op) {
+            return &sparc_op_defs[i];
+        }
+    }
+    return NULL;
+}
 
 static void tcg_target_init(TCGContext *s)
 {
@@ -1603,8 +1655,6 @@ static void tcg_target_init(TCGContext *s)
     tcg_regset_set_reg(s->reserved_regs, TCG_REG_O6); /* stack pointer */
     tcg_regset_set_reg(s->reserved_regs, TCG_REG_T1); /* for internal use */
     tcg_regset_set_reg(s->reserved_regs, TCG_REG_T2); /* for internal use */
-
-    tcg_add_target_add_op_defs(sparc_op_defs);
 }
 
 #if SPARC64

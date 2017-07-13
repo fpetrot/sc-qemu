@@ -25,14 +25,14 @@
  * for doing work at each node of a QAPI graph; it can also be used
  * for a virtual walk, where there is no actual QAPI C struct.
  *
- * There are four kinds of visitor classes: input visitors (QMP,
+ * There are four kinds of visitor classes: input visitors (QObject,
  * string, and QemuOpts) parse an external representation and build
- * the corresponding QAPI graph, output visitors (QMP and string) take
+ * the corresponding QAPI graph, output visitors (QObject and string) take
  * a completed QAPI graph and generate an external representation, the
  * dealloc visitor can take a QAPI graph (possibly partially
  * constructed) and recursively free its resources, and the clone
  * visitor performs a deep clone of one QAPI object to another.  While
- * the dealloc and QMP input/output visitors are general, the string,
+ * the dealloc and QObject input/output visitors are general, the string,
  * QemuOpts, and clone visitors have some implementation limitations;
  * see the documentation for each visitor for more details on what it
  * supports.  Also, see visitor-impl.h for the callback contracts
@@ -65,12 +65,6 @@
  * the root of a tree, @name is ignored; when visiting a member of an
  * object, @name is the key associated with the value; and when
  * visiting a member of a list, @name is NULL.
- *
- * FIXME: Clients must pass NULL for @name when visiting a member of a
- * list, but this leads to poor error messages; it might be nicer to
- * require a non-NULL name such as "key.0" for '{ "key": [ "value" ]
- * }' if an error is encountered on "value" (or to have the visitor
- * core auto-generate the nicer name).
  *
  * The visit_type_FOO() functions expect a non-null @obj argument;
  * they allocate *@obj during input visits, leave it unchanged on
@@ -374,6 +368,19 @@ void visit_start_list(Visitor *v, const char *name, GenericList **list,
  * set to the address of @tail->value.
  */
 GenericList *visit_next_list(Visitor *v, GenericList *tail, size_t size);
+
+/*
+ * Prepare for completing a list visit.
+ *
+ * @errp obeys typical error usage, and reports failures such as
+ * unvisited list tail remaining in the input stream.
+ *
+ * Should be called prior to visit_end_list() if all other
+ * intermediate visit steps were successful, to allow the visitor one
+ * last chance to report errors.  May be skipped on a cleanup path,
+ * where there is no need to check for further errors.
+ */
+void visit_check_list(Visitor *v, Error **errp);
 
 /*
  * Complete a list visit started earlier.

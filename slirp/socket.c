@@ -66,6 +66,23 @@ void
 sofree(struct socket *so)
 {
   Slirp *slirp = so->slirp;
+  struct mbuf *ifm;
+
+  for (ifm = (struct mbuf *) slirp->if_fastq.qh_link;
+       (struct quehead *) ifm != &slirp->if_fastq;
+       ifm = ifm->ifq_next) {
+    if (ifm->ifq_so == so) {
+      ifm->ifq_so = NULL;
+    }
+  }
+
+  for (ifm = (struct mbuf *) slirp->if_batchq.qh_link;
+       (struct quehead *) ifm != &slirp->if_batchq;
+       ifm = ifm->ifq_next) {
+    if (ifm->ifq_so == so) {
+      ifm->ifq_so = NULL;
+    }
+  }
 
   if (so->so_emu==EMU_RSH && so->extra) {
 	sofree(so->extra);
@@ -696,7 +713,9 @@ tcp_listen(Slirp *slirp, uint32_t haddr, u_int hport, uint32_t laddr,
 	    (listen(s,1) < 0)) {
 		int tmperrno = errno; /* Don't clobber the real reason we failed */
 
-		close(s);
+                if (s >= 0) {
+                    closesocket(s);
+                }
 		sofree(so);
 		/* Restore the real errno */
 #ifdef _WIN32

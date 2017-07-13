@@ -291,19 +291,13 @@ static int megasas_map_sgl(MegasasState *s, MegasasCmd *cmd, union mfi_sgl *sgl)
     if (cmd->iov_size > iov_size) {
         trace_megasas_iovec_overflow(cmd->index, iov_size, cmd->iov_size);
     } else if (cmd->iov_size < iov_size) {
-        trace_megasas_iovec_underflow(cmd->iov_size, iov_size, cmd->iov_size);
+        trace_megasas_iovec_underflow(cmd->index, iov_size, cmd->iov_size);
     }
     cmd->iov_offset = 0;
     return 0;
 unmap:
     qemu_sglist_destroy(&cmd->qsg);
     return iov_count - i;
-}
-
-static void megasas_unmap_sgl(MegasasCmd *cmd)
-{
-    qemu_sglist_destroy(&cmd->qsg);
-    cmd->iov_offset = 0;
 }
 
 /*
@@ -461,9 +455,12 @@ static void megasas_unmap_frame(MegasasState *s, MegasasCmd *cmd)
 {
     PCIDevice *p = PCI_DEVICE(s);
 
-    pci_dma_unmap(p, cmd->frame, cmd->pa_size, 0, 0);
+    if (cmd->pa_size) {
+        pci_dma_unmap(p, cmd->frame, cmd->pa_size, 0, 0);
+    }
     cmd->frame = NULL;
     cmd->pa = 0;
+    cmd->pa_size = 0;
     clear_bit(cmd->index, s->frame_map);
 }
 
@@ -577,6 +574,20 @@ static void megasas_complete_frame(MegasasState *s, uint64_t context)
     }
 }
 
+static void megasas_complete_command(MegasasCmd *cmd)
+{
+    qemu_sglist_destroy(&cmd->qsg);
+    cmd->iov_size = 0;
+    cmd->iov_offset = 0;
+
+    cmd->req->hba_private = NULL;
+    scsi_req_unref(cmd->req);
+    cmd->req = NULL;
+
+    megasas_unmap_frame(cmd->state, cmd);
+    megasas_complete_frame(cmd->state, cmd->context);
+}
+
 static void megasas_reset_frames(MegasasState *s)
 {
     int i;
@@ -593,9 +604,9 @@ static void megasas_reset_frames(MegasasState *s)
 
 static void megasas_abort_command(MegasasCmd *cmd)
 {
-    if (cmd->req) {
+    /* Never abort internal commands.  */
+    if (cmd->req != NULL) {
         scsi_req_cancel(cmd->req);
-        cmd->req = NULL;
     }
 }
 
@@ -672,23 +683,20 @@ static int megasas_map_dcmd(MegasasState *s, MegasasCmd *cmd)
         trace_megasas_dcmd_invalid_sge(cmd->index,
                                        cmd->frame->header.sge_count);
         cmd->iov_size = 0;
-        return -1;
+        return -EINVAL;
     }
     iov_pa = megasas_sgl_get_addr(cmd, &cmd->frame->dcmd.sgl);
     iov_size = megasas_sgl_get_len(cmd, &cmd->frame->dcmd.sgl);
     pci_dma_sglist_init(&cmd->qsg, PCI_DEVICE(s), 1);
     qemu_sglist_add(&cmd->qsg, iov_pa, iov_size);
     cmd->iov_size = iov_size;
-    return cmd->iov_size;
+    return 0;
 }
 
 static void megasas_finish_dcmd(MegasasCmd *cmd, uint32_t iov_size)
 {
     trace_megasas_finish_dcmd(cmd->index, iov_size);
 
-    if (cmd->frame->header.sge_count) {
-        qemu_sglist_destroy(&cmd->qsg);
-    }
     if (iov_size > cmd->iov_size) {
         if (megasas_frame_is_ieee_sgl(cmd)) {
             cmd->frame->dcmd.sgl.sg_skinny->len = cpu_to_le32(iov_size);
@@ -698,7 +706,6 @@ static void megasas_finish_dcmd(MegasasCmd *cmd, uint32_t iov_size)
             cmd->frame->dcmd.sgl.sg32->len = cpu_to_le32(iov_size);
         }
     }
-    cmd->iov_size = 0;
 }
 
 static int megasas_ctrl_get_info(MegasasState *s, MegasasCmd *cmd)
@@ -1552,19 +1559,20 @@ static const struct dcmd_cmd_tbl_t {
 
 static int megasas_handle_dcmd(MegasasState *s, MegasasCmd *cmd)
 {
-    int opcode, len;
+    int opcode;
     int retval = 0;
+    size_t len;
     const struct dcmd_cmd_tbl_t *cmdptr = dcmd_cmd_tbl;
 
     opcode = le32_to_cpu(cmd->frame->dcmd.opcode);
     trace_megasas_handle_dcmd(cmd->index, opcode);
-    len = megasas_map_dcmd(s, cmd);
-    if (len < 0) {
+    if (megasas_map_dcmd(s, cmd) < 0) {
         return MFI_STAT_MEMORY_NOT_AVAILABLE;
     }
     while (cmdptr->opcode != -1 && cmdptr->opcode != opcode) {
         cmdptr++;
     }
+    len = cmd->iov_size;
     if (cmdptr->opcode == -1) {
         trace_megasas_dcmd_unhandled(cmd->index, opcode, len);
         retval = megasas_dcmd_dummy(s, cmd);
@@ -1586,7 +1594,6 @@ static int megasas_finish_internal_dcmd(MegasasCmd *cmd,
     int lun = req->lun;
 
     opcode = le32_to_cpu(cmd->frame->dcmd.opcode);
-    scsi_req_unref(req);
     trace_megasas_dcmd_internal_finish(cmd->index, opcode, lun);
     switch (opcode) {
     case MFI_DCMD_PD_GET_INFO:
@@ -1857,7 +1864,11 @@ static void megasas_command_complete(SCSIRequest *req, uint32_t status,
 
     trace_megasas_command_complete(cmd->index, status, resid);
 
-    if (cmd->req != req) {
+    if (req->io_canceled) {
+        return;
+    }
+
+    if (cmd->req == NULL) {
         /*
          * Internal command complete
          */
@@ -1876,25 +1887,21 @@ static void megasas_command_complete(SCSIRequest *req, uint32_t status,
             megasas_copy_sense(cmd);
         }
 
-        megasas_unmap_sgl(cmd);
         cmd->frame->header.scsi_status = req->status;
-        scsi_req_unref(cmd->req);
-        cmd->req = NULL;
     }
     cmd->frame->header.cmd_status = cmd_status;
-    megasas_unmap_frame(cmd->state, cmd);
-    megasas_complete_frame(cmd->state, cmd->context);
+    megasas_complete_command(cmd);
 }
 
-static void megasas_command_cancel(SCSIRequest *req)
+static void megasas_command_cancelled(SCSIRequest *req)
 {
     MegasasCmd *cmd = req->hba_private;
 
-    if (cmd) {
-        megasas_abort_command(cmd);
-    } else {
-        scsi_req_unref(req);
+    if (!cmd) {
+        return;
     }
+    cmd->frame->header.cmd_status = MFI_STAT_SCSI_IO_FAILED;
+    megasas_complete_command(cmd);
 }
 
 static int megasas_handle_abort(MegasasState *s, MegasasCmd *cmd)
@@ -1917,8 +1924,8 @@ static int megasas_handle_abort(MegasasState *s, MegasasCmd *cmd)
         abort_ctx &= (uint64_t)0xFFFFFFFF;
     }
     if (abort_cmd->context != abort_ctx) {
-        trace_megasas_abort_invalid_context(cmd->index, abort_cmd->index,
-                                            abort_cmd->context);
+        trace_megasas_abort_invalid_context(cmd->index, abort_cmd->context,
+                                            abort_cmd->index);
         s->event_count++;
         return MFI_STAT_ABORT_NOT_POSSIBLE;
     }
@@ -1981,7 +1988,11 @@ static void megasas_handle_frame(MegasasState *s, uint64_t frame_addr,
         break;
     }
     if (frame_status != MFI_STAT_INVALID_STATUS) {
-        cmd->frame->header.cmd_status = frame_status;
+        if (cmd->frame) {
+            cmd->frame->header.cmd_status = frame_status;
+        } else {
+            megasas_frame_set_cmd_status(s, frame_addr, frame_status);
+        }
         megasas_unmap_frame(s, cmd);
         megasas_complete_frame(s, cmd->context);
     }
@@ -2278,7 +2289,7 @@ static const VMStateDescription vmstate_megasas_gen2 = {
     .minimum_version_id = 0,
     .minimum_version_id_old = 0,
     .fields      = (VMStateField[]) {
-        VMSTATE_PCIE_DEVICE(parent_obj, MegasasState),
+        VMSTATE_PCI_DEVICE(parent_obj, MegasasState),
         VMSTATE_MSIX(parent_obj, MegasasState),
 
         VMSTATE_INT32(fw_state, MegasasState),
@@ -2309,12 +2320,11 @@ static const struct SCSIBusInfo megasas_scsi_info = {
     .transfer_data = megasas_xfer_complete,
     .get_sg_list = megasas_get_sg_list,
     .complete = megasas_command_complete,
-    .cancel = megasas_command_cancel,
+    .cancel = megasas_command_cancelled,
 };
 
 static void megasas_scsi_realize(PCIDevice *dev, Error **errp)
 {
-    DeviceState *d = DEVICE(dev);
     MegasasState *s = MEGASAS(dev);
     MegasasBaseClass *b = MEGASAS_DEVICE_GET_CLASS(s);
     uint8_t *pci_conf;
@@ -2356,9 +2366,11 @@ static void megasas_scsi_realize(PCIDevice *dev, Error **errp)
 
     if (megasas_use_msix(s) &&
         msix_init(dev, 15, &s->mmio_io, b->mmio_bar, 0x2000,
-                  &s->mmio_io, b->mmio_bar, 0x3800, 0x68)) {
+                  &s->mmio_io, b->mmio_bar, 0x3800, 0x68, NULL)) {
+        /* TODO: check msix_init's error, and should fail on msix=on */
         s->msix = ON_OFF_AUTO_OFF;
     }
+
     if (pci_is_express(dev)) {
         pcie_endpoint_cap_init(dev, 0xa0);
     }
@@ -2413,9 +2425,6 @@ static void megasas_scsi_realize(PCIDevice *dev, Error **errp)
 
     scsi_bus_new(&s->bus, sizeof(s->bus), DEVICE(dev),
                  &megasas_scsi_info, NULL);
-    if (!d->hotplugged) {
-        scsi_bus_legacy_handle_cmdline(&s->bus, errp);
-    }
 }
 
 static Property megasas_properties_gen1[] = {

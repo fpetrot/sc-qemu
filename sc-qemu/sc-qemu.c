@@ -27,6 +27,20 @@ typedef void (*ctor_fn)(void);
 static GArray *ctor_fns = NULL;
 static size_t ctor_count = 0;
 
+static inline void lock_iothread(bool was_locked)
+{
+    if (!was_locked) {
+        qemu_mutex_lock_iothread();
+    }
+}
+
+static inline void unlock_iothread(bool was_locked)
+{
+    if (!was_locked) {
+        qemu_mutex_unlock_iothread();
+    }
+}
+
 static uint64_t sc_mmio_read(void *opaque, hwaddr offset,
                            unsigned size)
 {
@@ -46,8 +60,7 @@ static uint64_t sc_mmio_read(void *opaque, hwaddr offset,
     qctx->mmio_size = size;
     qctx->mmio_attr.cpuid = current_cpu->cpu_index;
 
-    qemu_mutex_unlock(&qctx->mutex_sc);
-    qemu_mutex_lock(&qctx->mutex_main);
+    qemu_cpu_cond_wait(&qctx->io_cond);
 
     return qctx->mmio_value;
 #endif
@@ -74,8 +87,7 @@ static void sc_mmio_write(void *opaque, hwaddr offset,
     qctx->mmio_size = size;
     qctx->mmio_attr.cpuid = current_cpu->cpu_index;
 
-    qemu_mutex_unlock(&qctx->mutex_sc);
-    qemu_mutex_lock(&qctx->mutex_main);
+    qemu_cpu_cond_wait(&qctx->io_cond);
 #endif
 }
 
@@ -90,35 +102,11 @@ static const MemoryRegionOps sc_mmio_ops = {
 bool main_loop_should_exit(void);
 /* ---- */
 
-static void * main_thread(void *arg);
-
-static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed)
-{
-    do {
-        qemu_mutex_unlock(&ctx->mutex_main);
-        qemu_mutex_lock(&ctx->mutex_sc);
-
-        switch (ctx->main_status) {
-        case MAIN_MMIO_READ:
-            ctx->mmio_value = ctx->sysc.read(ctx->opaque, ctx->mmio_addr, ctx->mmio_size, &ctx->mmio_attr);
-            break;
-        case MAIN_MMIO_WRITE:
-            ctx->sysc.write(ctx->opaque, ctx->mmio_addr, ctx->mmio_value, ctx->mmio_size, &ctx->mmio_attr);
-            break;
-        default:
-            break;
-        }
-    } while (ctx->main_status > MAIN_ABORT);
-
-    if (elapsed) {
-        *elapsed = ctx->last_elapsed;
-    }
-
-    return (ctx->main_status != MAIN_OK) || main_loop_should_exit();
-}
-
 static MemoryRegion* map_io(qemu_context *ctx, MemoryRegion *root, uint64_t base, uint64_t size)
 {
+    bool was_locked = qemu_mutex_iothread_locked();
+    lock_iothread(was_locked);
+
     MemoryRegion *mmio = g_new(MemoryRegion, 1);
     mmio_ctx *m_ctx = g_new(mmio_ctx, 1);
 
@@ -126,7 +114,10 @@ static MemoryRegion* map_io(qemu_context *ctx, MemoryRegion *root, uint64_t base
     m_ctx->qemu_ctx = ctx;
 
     memory_region_init_io(mmio, NULL, &sc_mmio_ops, m_ctx, "sc-mmio", size);
+
     memory_region_add_subregion(root, base, mmio);
+
+    unlock_iothread(was_locked);
 
     return mmio;
 }
@@ -140,6 +131,9 @@ static void sc_qemu_map_io(qemu_context *ctx, uint32_t base_address,
 static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
                             uint32_t size, void* data, bool readonly)
 {
+    bool was_locked = qemu_mutex_iothread_locked();
+    lock_iothread(was_locked);
+
     MemoryRegion *sysmem = get_system_memory();
     MemoryRegion *dmi = g_new(MemoryRegion, 1);
     static int dmi_count = 0;
@@ -160,7 +154,10 @@ static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
     }
 
     vmstate_register_ram_global(dmi);
+
     memory_region_add_subregion(sysmem, base_address, dmi);
+
+    unlock_iothread(was_locked);
 }
 
 static void sc_qemu_start_gdbserver(qemu_context *ctx, const char *port)
@@ -179,26 +176,53 @@ static void deadline_cb(void *opaque)
 
 static qemu_context *main_thread_ctx = NULL;
 
-static void * main_thread(void *arg)
+static void do_one_main_loop(qemu_context *ctx)
 {
-    qemu_context *ctx = (qemu_context*) arg;
-    static int last_io = 0;
     int64_t before;
+    static int last_io = 0;
 
     main_thread_ctx = ctx;
 
-    for (;;) {
-        qemu_mutex_lock(&ctx->mutex_main);
-
-        before = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-        last_io = main_loop_wait(last_io > 0);
-        ctx->last_elapsed = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - before;
-
-        ctx->main_status = MAIN_OK;
-        qemu_mutex_unlock(&ctx->mutex_sc);
+    if (!qemu_mutex_iothread_locked()) {
+        /* This is the first time we are called */
+        qemu_mutex_lock_iothread();
+        vm_start();
     }
 
-    return NULL;
+    ctx->main_status = MAIN_OK;
+    before = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    last_io = main_loop_wait(last_io > 0);
+
+    ctx->last_elapsed = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - before;
+}
+
+static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed)
+{
+    do {
+        do_one_main_loop(ctx);
+
+        switch (ctx->main_status) {
+        case MAIN_MMIO_READ:
+            ctx->mmio_value = ctx->sysc.read(ctx->opaque, ctx->mmio_addr,
+                                             ctx->mmio_size, &ctx->mmio_attr);
+            qemu_cond_signal(&ctx->io_cond);
+            break;
+        case MAIN_MMIO_WRITE:
+            ctx->sysc.write(ctx->opaque, ctx->mmio_addr, ctx->mmio_value,
+                            ctx->mmio_size, &ctx->mmio_attr);
+            qemu_cond_signal(&ctx->io_cond);
+            break;
+        default:
+            break;
+        }
+    } while (ctx->main_status > MAIN_ABORT);
+
+    if (elapsed) {
+        *elapsed = ctx->last_elapsed;
+    }
+
+    return (ctx->main_status != MAIN_OK) || main_loop_should_exit();
 }
 
 static void call_qemu_ctors(void)
@@ -224,9 +248,6 @@ static void init_q_import(qemu_import *q_import)
     q_import->map_io = sc_qemu_map_io;
     q_import->map_dmi = sc_qemu_map_dmi;
     q_import->start_gdbserver = sc_qemu_start_gdbserver;
-    q_import->char_dev_create = sc_qemu_char_dev_create;
-    q_import->char_dev_write = sc_qemu_char_dev_write;
-    q_import->char_dev_register_read = sc_qemu_char_dev_register_read;
     q_import->object_new = sc_qemu_object_new;
     q_import->object_property_set_bool = sc_qemu_object_property_set_bool;
     q_import->object_property_set_int = sc_qemu_object_property_set_int;
@@ -247,23 +268,11 @@ static void setup_limiter_timer(sc_qemu_init_struct *s, qemu_context *ctx)
     } else {
         /* Limit the time we can last into the main loop */
         ctx->limiter_clock = QEMU_CLOCK_HOST;
-        ctx->max_run_time_ns = SCALE_MS;
+        ctx->max_run_time_ns = SCALE_MS >> 7; /* XXX not sure how to calibrate this value */
     }
 
     ctx->deadline = timer_new_ns(ctx->limiter_clock, deadline_cb, ctx);
     timer_mod(ctx->deadline, qemu_clock_get_ns(ctx->limiter_clock) + ctx->max_run_time_ns);
-}
-
-static void init_main_thread(qemu_context *ctx)
-{
-    qemu_mutex_init(&ctx->mutex_main);
-    qemu_mutex_init(&ctx->mutex_sc);
-
-    qemu_mutex_lock(&ctx->mutex_main);
-    qemu_mutex_lock(&ctx->mutex_sc);
-
-    qemu_thread_create(&ctx->main_thread, "sc-qemu-main", main_thread,
-                       (void*) ctx, QEMU_THREAD_JOINABLE);
 }
 
 
@@ -274,9 +283,14 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
     char const * qemu_base_argv[] = {
         "",
         "-M", "none",
+        "-m", "2048",
         "-monitor", "null",
         "-serial", "null",
         "-nographic",
+        "-accel", "tcg,thread=single",
+        /*"-d", "in_asm,cpu,exec",*/
+        /*"-D", "qemu.log",*/
+        "-S",
     };
 
     char icount_option[] = "shift=00,align=off";
@@ -312,8 +326,9 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
         ctx->root_mr = get_system_memory();
     }
 
-    init_main_thread(ctx);
+    qemu_cond_init(&ctx->io_cond);
 
+    qemu_mutex_unlock_iothread();
     return ctx;
 }
 
@@ -330,8 +345,8 @@ void sc_qemu_do_register_ctor(ctor_fn f)
 static QEMU_NORETURN void main_thread_abort(void)
 {
     for (;;) {
-        qemu_mutex_unlock(&main_thread_ctx->mutex_sc);
-        qemu_mutex_lock(&main_thread_ctx->mutex_main);
+        /* FIXME */
+        qemu_cpu_cond_wait(&main_thread_ctx->io_cond);
     }
 }
 

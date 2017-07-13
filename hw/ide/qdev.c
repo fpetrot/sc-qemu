@@ -31,6 +31,7 @@
 /* --------------------------------- */
 
 static char *idebus_get_fw_dev_path(DeviceState *dev);
+static void idebus_unrealize(BusState *qdev, Error **errp);
 
 static Property ide_props[] = {
     DEFINE_PROP_UINT32("unit", IDEDevice, unit, -1),
@@ -42,6 +43,16 @@ static void ide_bus_class_init(ObjectClass *klass, void *data)
     BusClass *k = BUS_CLASS(klass);
 
     k->get_fw_dev_path = idebus_get_fw_dev_path;
+    k->unrealize = idebus_unrealize;
+}
+
+static void idebus_unrealize(BusState *bus, Error **errp)
+{
+    IDEBus *ibus = IDE_BUS(bus);
+
+    if (ibus->vmstate) {
+        qemu_del_vm_change_state_handler(ibus->vmstate);
+    }
 }
 
 static const TypeInfo ide_bus_info = {
@@ -75,10 +86,6 @@ static int ide_qdev_init(DeviceState *qdev)
     IDEDeviceClass *dc = IDE_DEVICE_GET_CLASS(dev);
     IDEBus *bus = DO_UPCAST(IDEBus, qbus, qdev->parent_bus);
 
-    if (!dev->conf.blk) {
-        error_report("No drive specified");
-        goto err;
-    }
     if (dev->unit == -1) {
         dev->unit = bus->master ? 1 : 0;
     }
@@ -158,6 +165,16 @@ static int ide_dev_initfn(IDEDevice *dev, IDEDriveKind kind)
     IDEState *s = bus->ifs + dev->unit;
     Error *err = NULL;
 
+    if (!dev->conf.blk) {
+        if (kind != IDE_CD) {
+            error_report("No drive specified");
+            return -1;
+        } else {
+            /* Anonymous BlockBackend for an empty drive */
+            dev->conf.blk = blk_new(0, BLK_PERM_ALL);
+        }
+    }
+
     if (dev->conf.discard_granularity == -1) {
         dev->conf.discard_granularity = 512;
     } else if (dev->conf.discard_granularity &&
@@ -180,7 +197,12 @@ static int ide_dev_initfn(IDEDevice *dev, IDEDriveKind kind)
             return -1;
         }
     }
-    blkconf_apply_backend_options(&dev->conf);
+    blkconf_apply_backend_options(&dev->conf, kind == IDE_CD, kind != IDE_CD,
+                                  &err);
+    if (err) {
+        error_report_err(err);
+        return -1;
+    }
 
     if (ide_init_drive(s, dev->conf.blk, kind,
                        dev->version, dev->serial, dev->model, dev->wwn,
@@ -257,7 +279,11 @@ static int ide_cd_initfn(IDEDevice *dev)
 
 static int ide_drive_initfn(IDEDevice *dev)
 {
-    DriveInfo *dinfo = blk_legacy_dinfo(dev->conf.blk);
+    DriveInfo *dinfo = NULL;
+
+    if (dev->conf.blk) {
+        dinfo = blk_legacy_dinfo(dev->conf.blk);
+    }
 
     return ide_dev_initfn(dev, dinfo && dinfo->media_cd ? IDE_CD : IDE_HD);
 }

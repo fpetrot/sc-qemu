@@ -9,14 +9,15 @@
 extern Monitor *cur_mon;
 
 /* flags for monitor_init */
-#define MONITOR_IS_DEFAULT    0x01
+/* 0x01 unused */
 #define MONITOR_USE_READLINE  0x02
 #define MONITOR_USE_CONTROL   0x04
 #define MONITOR_USE_PRETTY    0x08
 
 bool monitor_cur_is_qmp(void);
 
-void monitor_init(CharDriverState *chr, int flags);
+void monitor_init_qmp_commands(void);
+void monitor_init(Chardev *chr, int flags);
 void monitor_cleanup(void);
 
 int monitor_suspend(Monitor *mon);

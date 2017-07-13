@@ -31,6 +31,7 @@
 #define EXCP_DEBUG      0x10002 /* cpu stopped after a breakpoint or singlestep */
 #define EXCP_HALTED     0x10003 /* cpu is halted (waiting for external event) */
 #define EXCP_YIELD      0x10004 /* cpu wants to yield timeslice to another */
+#define EXCP_ATOMIC     0x10005 /* stop-the-world and emulate atomic */
 
 /* some important defines:
  *
@@ -185,9 +186,41 @@ void address_space_stl(AddressSpace *as, hwaddr addr, uint32_t val,
                             MemTxAttrs attrs, MemTxResult *result);
 void address_space_stq(AddressSpace *as, hwaddr addr, uint64_t val,
                             MemTxAttrs attrs, MemTxResult *result);
+
+uint32_t lduw_phys_cached(MemoryRegionCache *cache, hwaddr addr);
+uint32_t ldl_phys_cached(MemoryRegionCache *cache, hwaddr addr);
+uint64_t ldq_phys_cached(MemoryRegionCache *cache, hwaddr addr);
+void stl_phys_notdirty_cached(MemoryRegionCache *cache, hwaddr addr, uint32_t val);
+void stw_phys_cached(MemoryRegionCache *cache, hwaddr addr, uint32_t val);
+void stl_phys_cached(MemoryRegionCache *cache, hwaddr addr, uint32_t val);
+void stq_phys_cached(MemoryRegionCache *cache, hwaddr addr, uint64_t val);
+
+uint32_t address_space_lduw_cached(MemoryRegionCache *cache, hwaddr addr,
+                            MemTxAttrs attrs, MemTxResult *result);
+uint32_t address_space_ldl_cached(MemoryRegionCache *cache, hwaddr addr,
+                            MemTxAttrs attrs, MemTxResult *result);
+uint64_t address_space_ldq_cached(MemoryRegionCache *cache, hwaddr addr,
+                            MemTxAttrs attrs, MemTxResult *result);
+void address_space_stl_notdirty_cached(MemoryRegionCache *cache, hwaddr addr,
+                            uint32_t val, MemTxAttrs attrs, MemTxResult *result);
+void address_space_stw_cached(MemoryRegionCache *cache, hwaddr addr, uint32_t val,
+                            MemTxAttrs attrs, MemTxResult *result);
+void address_space_stl_cached(MemoryRegionCache *cache, hwaddr addr, uint32_t val,
+                            MemTxAttrs attrs, MemTxResult *result);
+void address_space_stq_cached(MemoryRegionCache *cache, hwaddr addr, uint64_t val,
+                            MemTxAttrs attrs, MemTxResult *result);
 #endif
 
 /* page related stuff */
+
+#ifdef TARGET_PAGE_BITS_VARY
+extern bool target_page_bits_decided;
+extern int target_page_bits;
+#define TARGET_PAGE_BITS ({ assert(target_page_bits_decided); \
+                            target_page_bits; })
+#else
+#define TARGET_PAGE_BITS_MIN TARGET_PAGE_BITS
+#endif
 
 #define TARGET_PAGE_SIZE (1 << TARGET_PAGE_BITS)
 #define TARGET_PAGE_MASK ~(TARGET_PAGE_SIZE - 1)

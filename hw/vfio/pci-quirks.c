@@ -660,7 +660,7 @@ static void vfio_probe_nvidia_bar5_quirk(VFIOPCIDevice *vdev, int nr)
     VFIOConfigWindowQuirk *window;
 
     if (!vfio_pci_is(vdev, PCI_VENDOR_ID_NVIDIA, PCI_ANY_ID) ||
-        !vdev->vga || nr != 5) {
+        !vdev->vga || nr != 5 || !vdev->bars[5].ioport) {
         return;
     }
 
@@ -898,7 +898,7 @@ static uint64_t vfio_rtl8168_quirk_data_read(void *opaque,
 {
     VFIOrtl8168Quirk *rtl = opaque;
     VFIOPCIDevice *vdev = rtl->vdev;
-    uint64_t data = vfio_region_read(&vdev->bars[2].region, addr + 0x74, size);
+    uint64_t data = vfio_region_read(&vdev->bars[2].region, addr + 0x70, size);
 
     if (rtl->enabled && (vdev->pdev.cap_present & QEMU_PCI_CAP_MSIX)) {
         hwaddr offset = rtl->addr & 0xfff;
@@ -1041,6 +1041,7 @@ static int igd_gen(VFIOPCIDevice *vdev)
 typedef struct VFIOIGDQuirk {
     struct VFIOPCIDevice *vdev;
     uint32_t index;
+    uint32_t bdsm;
 } VFIOIGDQuirk;
 
 #define IGD_GMCH 0x50 /* Graphics Control Register */
@@ -1056,7 +1057,7 @@ typedef struct VFIOIGDQuirk {
  * of the IGD device.
  */
 int vfio_pci_igd_opregion_init(VFIOPCIDevice *vdev,
-                               struct vfio_region_info *info)
+                               struct vfio_region_info *info, Error **errp)
 {
     int ret;
 
@@ -1064,7 +1065,7 @@ int vfio_pci_igd_opregion_init(VFIOPCIDevice *vdev,
     ret = pread(vdev->vbasedev.fd, vdev->igd_opregion,
                 info->size, info->offset);
     if (ret != info->size) {
-        error_report("vfio: Error reading IGD OpRegion");
+        error_setg(errp, "failed to read IGD OpRegion");
         g_free(vdev->igd_opregion);
         vdev->igd_opregion = NULL;
         return -EINVAL;
@@ -1171,7 +1172,7 @@ static int vfio_pci_igd_host_init(VFIOPCIDevice *vdev,
  * IGD LPC/ISA bridge support code.  The vBIOS needs this, but we can't write
  * arbitrary values into just any bridge, so we must create our own.  We try
  * to handle if the user has created it for us, which they might want to do
- * to enable multifuction so we don't occupy the whole PCI slot.
+ * to enable multifunction so we don't occupy the whole PCI slot.
  */
 static void vfio_pci_igd_lpc_bridge_realize(PCIDevice *pdev, Error **errp)
 {
@@ -1185,6 +1186,7 @@ static void vfio_pci_igd_lpc_bridge_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
+    set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
     dc->desc = "VFIO dummy ISA/LPC bridge for IGD assignment";
     dc->hotpluggable = false;
     k->realize = vfio_pci_igd_lpc_bridge_realize;
@@ -1304,7 +1306,7 @@ static void vfio_igd_quirk_data_write(void *opaque, hwaddr addr,
                          "BIOS reserved stolen memory.  Unsupported BIOS?");
             }
 
-            val = base | (data & ((1 << 20) - 1));
+            val = data - igd->bdsm + base;
         } else {
             val = 0; /* upper 32bits of pte, we only enable below 4G PTEs */
         }
@@ -1363,6 +1365,7 @@ static void vfio_probe_igd_bar4_quirk(VFIOPCIDevice *vdev, int nr)
     uint64_t *bdsm_size;
     uint32_t gmch;
     uint16_t cmd_orig, cmd;
+    Error *err = NULL;
 
     /*
      * This must be an Intel VGA device at address 00:02.0 for us to even
@@ -1464,7 +1467,8 @@ static void vfio_probe_igd_bar4_quirk(VFIOPCIDevice *vdev, int nr)
      * try to enable it.  Probably shouldn't be using legacy mode without VGA,
      * but also no point in us enabling VGA if disabled in hardware.
      */
-    if (!(gmch & 0x2) && !vdev->vga && vfio_populate_vga(vdev)) {
+    if (!(gmch & 0x2) && !vdev->vga && vfio_populate_vga(vdev, &err)) {
+        error_reportf_err(err, ERR_PREFIX, vdev->vbasedev.name);
         error_report("IGD device %s failed to enable VGA access, "
                      "legacy mode disabled", vdev->vbasedev.name);
         goto out;
@@ -1487,10 +1491,10 @@ static void vfio_probe_igd_bar4_quirk(VFIOPCIDevice *vdev, int nr)
     }
 
     /* Setup OpRegion access */
-    ret = vfio_pci_igd_opregion_init(vdev, opregion);
+    ret = vfio_pci_igd_opregion_init(vdev, opregion, &err);
     if (ret) {
-        error_report("IGD device %s failed to setup OpRegion, "
-                     "legacy mode disabled", vdev->vbasedev.name);
+        error_append_hint(&err, "IGD legacy mode disabled\n");
+        error_reportf_err(err, ERR_PREFIX, vdev->vbasedev.name);
         goto out;
     }
 
@@ -1501,6 +1505,8 @@ static void vfio_probe_igd_bar4_quirk(VFIOPCIDevice *vdev, int nr)
     igd = quirk->data = g_malloc0(sizeof(*igd));
     igd->vdev = vdev;
     igd->index = ~0;
+    igd->bdsm = vfio_pci_read_config(&vdev->pdev, IGD_BDSM, 4);
+    igd->bdsm &= ~((1 << 20) - 1); /* 1MB aligned */
 
     memory_region_init_io(&quirk->mem[0], OBJECT(vdev), &vfio_igd_index_quirk,
                           igd, "vfio-igd-index-quirk", 4);

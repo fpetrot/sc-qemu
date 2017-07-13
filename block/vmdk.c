@@ -941,6 +941,13 @@ static int vmdk_open(BlockDriverState *bs, QDict *options, int flags,
     int ret;
     BDRVVmdkState *s = bs->opaque;
     uint32_t magic;
+    Error *local_err = NULL;
+
+    bs->file = bdrv_open_child(NULL, options, "file", bs, &child_file,
+                               false, errp);
+    if (!bs->file) {
+        return -EINVAL;
+    }
 
     buf = vmdk_read_desc(bs->file, 0, errp);
     if (!buf) {
@@ -976,7 +983,13 @@ static int vmdk_open(BlockDriverState *bs, QDict *options, int flags,
     error_setg(&s->migration_blocker, "The vmdk format used by node '%s' "
                "does not support live migration",
                bdrv_get_device_or_node_name(bs));
-    migrate_add_blocker(s->migration_blocker);
+    ret = migrate_add_blocker(s->migration_blocker, &local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+        error_free(s->migration_blocker);
+        goto fail;
+    }
+
     g_free(buf);
     return 0;
 
@@ -1354,8 +1367,8 @@ static int vmdk_write_extent(VmdkExtent *extent, int64_t cluster_offset,
             goto out;
         }
 
-        data->lba = offset >> BDRV_SECTOR_BITS;
-        data->size = buf_len;
+        data->lba = cpu_to_le64(offset >> BDRV_SECTOR_BITS);
+        data->size = cpu_to_le32(buf_len);
 
         n_bytes = buf_len + sizeof(VmdkGrainMarker);
         iov = (struct iovec) {
@@ -1645,56 +1658,11 @@ vmdk_co_pwritev(BlockDriverState *bs, uint64_t offset, uint64_t bytes,
     return ret;
 }
 
-typedef struct VmdkWriteCompressedCo {
-    BlockDriverState *bs;
-    int64_t sector_num;
-    const uint8_t *buf;
-    int nb_sectors;
-    int ret;
-} VmdkWriteCompressedCo;
-
-static void vmdk_co_write_compressed(void *opaque)
+static int coroutine_fn
+vmdk_co_pwritev_compressed(BlockDriverState *bs, uint64_t offset,
+                           uint64_t bytes, QEMUIOVector *qiov)
 {
-    VmdkWriteCompressedCo *co = opaque;
-    QEMUIOVector local_qiov;
-    uint64_t offset = co->sector_num * BDRV_SECTOR_SIZE;
-    uint64_t bytes = co->nb_sectors * BDRV_SECTOR_SIZE;
-
-    struct iovec iov = (struct iovec) {
-        .iov_base   = (uint8_t*) co->buf,
-        .iov_len    = bytes,
-    };
-    qemu_iovec_init_external(&local_qiov, &iov, 1);
-
-    co->ret = vmdk_pwritev(co->bs, offset, bytes, &local_qiov, false, false);
-}
-
-static int vmdk_write_compressed(BlockDriverState *bs,
-                                 int64_t sector_num,
-                                 const uint8_t *buf,
-                                 int nb_sectors)
-{
-    BDRVVmdkState *s = bs->opaque;
-
-    if (s->num_extents == 1 && s->extents[0].compressed) {
-        Coroutine *co;
-        AioContext *aio_context = bdrv_get_aio_context(bs);
-        VmdkWriteCompressedCo data = {
-            .bs         = bs,
-            .sector_num = sector_num,
-            .buf        = buf,
-            .nb_sectors = nb_sectors,
-            .ret        = -EINPROGRESS,
-        };
-        co = qemu_coroutine_create(vmdk_co_write_compressed, &data);
-        qemu_coroutine_enter(co);
-        while (data.ret == -EINPROGRESS) {
-            aio_poll(aio_context, true);
-        }
-        return data.ret;
-    } else {
-        return -ENOTSUP;
-    }
+    return vmdk_co_pwritev(bs, offset, bytes, qiov, 0);
 }
 
 static int coroutine_fn vmdk_co_pwrite_zeroes(BlockDriverState *bs,
@@ -1735,7 +1703,8 @@ static int vmdk_create_extent(const char *filename, int64_t filesize,
     }
 
     blk = blk_new_open(filename, NULL, NULL,
-                       BDRV_O_RDWR | BDRV_O_PROTOCOL, &local_err);
+                       BDRV_O_RDWR | BDRV_O_RESIZE | BDRV_O_PROTOCOL,
+                       &local_err);
     if (blk == NULL) {
         error_propagate(errp, local_err);
         ret = -EIO;
@@ -2103,7 +2072,8 @@ static int vmdk_create(const char *filename, QemuOpts *opts, Error **errp)
     }
 
     new_blk = blk_new_open(filename, NULL, NULL,
-                           BDRV_O_RDWR | BDRV_O_PROTOCOL, &local_err);
+                           BDRV_O_RDWR | BDRV_O_RESIZE | BDRV_O_PROTOCOL,
+                           &local_err);
     if (new_blk == NULL) {
         error_propagate(errp, local_err);
         ret = -EIO;
@@ -2391,9 +2361,10 @@ static BlockDriver bdrv_vmdk = {
     .bdrv_open                    = vmdk_open,
     .bdrv_check                   = vmdk_check,
     .bdrv_reopen_prepare          = vmdk_reopen_prepare,
+    .bdrv_child_perm              = bdrv_format_default_perms,
     .bdrv_co_preadv               = vmdk_co_preadv,
     .bdrv_co_pwritev              = vmdk_co_pwritev,
-    .bdrv_write_compressed        = vmdk_write_compressed,
+    .bdrv_co_pwritev_compressed   = vmdk_co_pwritev_compressed,
     .bdrv_co_pwrite_zeroes        = vmdk_co_pwrite_zeroes,
     .bdrv_close                   = vmdk_close,
     .bdrv_create                  = vmdk_create,

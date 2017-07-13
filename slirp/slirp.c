@@ -198,7 +198,7 @@ static int get_dns_addr_resolv_conf(int af, void *pdns_addr, void *cached_addr,
 #ifdef DEBUG
             else {
                 char s[INET6_ADDRSTRLEN];
-                char *res = inet_ntop(af, tmp_addr, s, sizeof(s));
+                const char *res = inet_ntop(af, tmp_addr, s, sizeof(s));
                 if (!res) {
                     res = "(string conversion error)";
                 }
@@ -774,7 +774,7 @@ void slirp_pollfds_poll(GArray *pollfds, int select_error)
 static void arp_input(Slirp *slirp, const uint8_t *pkt, int pkt_len)
 {
     struct slirp_arphdr *ah = (struct slirp_arphdr *)(pkt + ETH_HLEN);
-    uint8_t arp_reply[max(ETH_HLEN + sizeof(struct slirp_arphdr), 64)];
+    uint8_t arp_reply[MAX(ETH_HLEN + sizeof(struct slirp_arphdr), 64)];
     struct ethhdr *reh = (struct ethhdr *)arp_reply;
     struct slirp_arphdr *rah = (struct slirp_arphdr *)(arp_reply + ETH_HLEN);
     int ar_op;
@@ -1072,7 +1072,9 @@ int slirp_add_exec(Slirp *slirp, int do_pty, const void *args,
 ssize_t slirp_send(struct socket *so, const void *buf, size_t len, int flags)
 {
     if (so->s == -1 && so->extra) {
-        qemu_chr_fe_write(so->extra, buf, len);
+        /* XXX this blocks entire thread. Rewrite to use
+         * qemu_chr_fe_write and background I/O callbacks */
+        qemu_chr_fe_write_all(so->extra, buf, len);
         return len;
     }
 

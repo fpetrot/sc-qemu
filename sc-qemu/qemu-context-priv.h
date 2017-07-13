@@ -27,8 +27,7 @@ struct qemu_context {
 
     enum ScQemuMainLoopStatus main_status;
     int64_t last_elapsed;
-    QemuThread main_thread;
-    QemuMutex mutex_sc, mutex_main;
+    QemuCond io_cond;
 
     /* MMIO */
     uint64_t mmio_addr;

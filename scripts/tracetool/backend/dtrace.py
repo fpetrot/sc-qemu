@@ -35,12 +35,17 @@ def binary():
     return BINARY
 
 
-def generate_h_begin(events):
-    out('#include "trace/generated-tracers-dtrace.h"',
+def generate_h_begin(events, group):
+    if group == "root":
+        header = "trace-dtrace-root.h"
+    else:
+        header = "trace-dtrace.h"
+
+    out('#include "%s"' % header,
         '')
 
 
-def generate_h(event):
+def generate_h(event, group):
     out('        QEMU_%(uppername)s(%(argnames)s);',
         uppername=event.name.upper(),
         argnames=", ".join(event.args.names()))

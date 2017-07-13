@@ -1,4 +1,5 @@
 /*
+ *  Copyright (C) 2016 Red Hat, Inc.
  *  Copyright (C) 2005  Anthony Liguori <anthony@codemonkey.ws>
  *
  *  Network Block Device Server Side
@@ -38,6 +39,8 @@ static int system_errno_to_nbd_errno(int err)
     case EFBIG:
     case ENOSPC:
         return NBD_ENOSPC;
+    case ESHUTDOWN:
+        return NBD_ESHUTDOWN;
     case EINVAL:
     default:
         return NBD_EINVAL;
@@ -46,10 +49,10 @@ static int system_errno_to_nbd_errno(int err)
 
 /* Definitions for opaque data types */
 
-typedef struct NBDRequest NBDRequest;
+typedef struct NBDRequestData NBDRequestData;
 
-struct NBDRequest {
-    QSIMPLEQ_ENTRY(NBDRequest) entry;
+struct NBDRequestData {
+    QSIMPLEQ_ENTRY(NBDRequestData) entry;
     NBDClient *client;
     uint8_t *data;
     bool complete;
@@ -61,6 +64,7 @@ struct NBDExport {
 
     BlockBackend *blk;
     char *name;
+    char *description;
     off_t dev_offset;
     off_t size;
     uint16_t nbdflags;
@@ -69,6 +73,7 @@ struct NBDExport {
 
     AioContext *ctx;
 
+    BlockBackend *eject_notifier_blk;
     Notifier eject_notifier;
 };
 
@@ -78,6 +83,7 @@ struct NBDClient {
     int refcount;
     void (*close)(NBDClient *client);
 
+    bool no_zeroes;
     NBDExport *exp;
     QCryptoTLSCreds *tlscreds;
     char *tlsaclname;
@@ -89,8 +95,6 @@ struct NBDClient {
     CoMutex send_lock;
     Coroutine *send_coroutine;
 
-    bool can_read;
-
     QTAILQ_ENTRY(NBDClient) next;
     int nb_requests;
     bool closing;
@@ -98,9 +102,7 @@ struct NBDClient {
 
 /* That's all folks */
 
-static void nbd_set_handlers(NBDClient *client);
-static void nbd_unset_handlers(NBDClient *client);
-static void nbd_update_can_read(NBDClient *client);
+static void nbd_client_receive_next_request(NBDClient *client);
 
 static gboolean nbd_negotiate_continue(QIOChannel *ioc,
                                        GIOCondition condition,
@@ -128,7 +130,8 @@ static ssize_t nbd_negotiate_read(QIOChannel *ioc, void *buffer, size_t size)
 
 }
 
-static ssize_t nbd_negotiate_write(QIOChannel *ioc, void *buffer, size_t size)
+static ssize_t nbd_negotiate_write(QIOChannel *ioc, const void *buffer,
+                                   size_t size)
 {
     ssize_t ret;
     guint watch;
@@ -192,12 +195,15 @@ static ssize_t nbd_negotiate_drop_sync(QIOChannel *ioc, size_t size)
 
 */
 
-static int nbd_negotiate_send_rep(QIOChannel *ioc, uint32_t type, uint32_t opt)
+/* Send a reply header, including length, but no payload.
+ * Return -errno on error, 0 on success. */
+static int nbd_negotiate_send_rep_len(QIOChannel *ioc, uint32_t type,
+                                      uint32_t opt, uint32_t len)
 {
     uint64_t magic;
-    uint32_t len;
 
-    TRACE("Reply opt=%" PRIx32 " type=%" PRIx32, type, opt);
+    TRACE("Reply opt=%" PRIx32 " type=%" PRIx32 " len=%" PRIu32,
+          type, opt, len);
 
     magic = cpu_to_be64(NBD_REP_MAGIC);
     if (nbd_negotiate_write(ioc, &magic, sizeof(magic)) != sizeof(magic)) {
@@ -214,7 +220,7 @@ static int nbd_negotiate_send_rep(QIOChannel *ioc, uint32_t type, uint32_t opt)
         LOG("write failed (rep type)");
         return -EINVAL;
     }
-    len = cpu_to_be32(0);
+    len = cpu_to_be32(len);
     if (nbd_negotiate_write(ioc, &len, sizeof(len)) != sizeof(len)) {
         LOG("write failed (rep data length)");
         return -EINVAL;
@@ -222,45 +228,82 @@ static int nbd_negotiate_send_rep(QIOChannel *ioc, uint32_t type, uint32_t opt)
     return 0;
 }
 
+/* Send a reply header with default 0 length.
+ * Return -errno on error, 0 on success. */
+static int nbd_negotiate_send_rep(QIOChannel *ioc, uint32_t type, uint32_t opt)
+{
+    return nbd_negotiate_send_rep_len(ioc, type, opt, 0);
+}
+
+/* Send an error reply.
+ * Return -errno on error, 0 on success. */
+static int GCC_FMT_ATTR(4, 5)
+nbd_negotiate_send_rep_err(QIOChannel *ioc, uint32_t type,
+                           uint32_t opt, const char *fmt, ...)
+{
+    va_list va;
+    char *msg;
+    int ret;
+    size_t len;
+
+    va_start(va, fmt);
+    msg = g_strdup_vprintf(fmt, va);
+    va_end(va);
+    len = strlen(msg);
+    assert(len < 4096);
+    TRACE("sending error message \"%s\"", msg);
+    ret = nbd_negotiate_send_rep_len(ioc, type, opt, len);
+    if (ret < 0) {
+        goto out;
+    }
+    if (nbd_negotiate_write(ioc, msg, len) != len) {
+        LOG("write failed (error message)");
+        ret = -EIO;
+    } else {
+        ret = 0;
+    }
+out:
+    g_free(msg);
+    return ret;
+}
+
+/* Send a single NBD_REP_SERVER reply to NBD_OPT_LIST, including payload.
+ * Return -errno on error, 0 on success. */
 static int nbd_negotiate_send_rep_list(QIOChannel *ioc, NBDExport *exp)
 {
-    uint64_t magic, name_len;
-    uint32_t opt, type, len;
+    size_t name_len, desc_len;
+    uint32_t len;
+    const char *name = exp->name ? exp->name : "";
+    const char *desc = exp->description ? exp->description : "";
+    int rc;
 
-    TRACE("Advertising export name '%s'", exp->name ? exp->name : "");
-    name_len = strlen(exp->name);
-    magic = cpu_to_be64(NBD_REP_MAGIC);
-    if (nbd_negotiate_write(ioc, &magic, sizeof(magic)) != sizeof(magic)) {
-        LOG("write failed (magic)");
-        return -EINVAL;
-     }
-    opt = cpu_to_be32(NBD_OPT_LIST);
-    if (nbd_negotiate_write(ioc, &opt, sizeof(opt)) != sizeof(opt)) {
-        LOG("write failed (opt)");
-        return -EINVAL;
+    TRACE("Advertising export name '%s' description '%s'", name, desc);
+    name_len = strlen(name);
+    desc_len = strlen(desc);
+    len = name_len + desc_len + sizeof(len);
+    rc = nbd_negotiate_send_rep_len(ioc, NBD_REP_SERVER, NBD_OPT_LIST, len);
+    if (rc < 0) {
+        return rc;
     }
-    type = cpu_to_be32(NBD_REP_SERVER);
-    if (nbd_negotiate_write(ioc, &type, sizeof(type)) != sizeof(type)) {
-        LOG("write failed (reply type)");
-        return -EINVAL;
-    }
-    len = cpu_to_be32(name_len + sizeof(len));
-    if (nbd_negotiate_write(ioc, &len, sizeof(len)) != sizeof(len)) {
-        LOG("write failed (length)");
-        return -EINVAL;
-    }
+
     len = cpu_to_be32(name_len);
     if (nbd_negotiate_write(ioc, &len, sizeof(len)) != sizeof(len)) {
-        LOG("write failed (length)");
+        LOG("write failed (name length)");
         return -EINVAL;
     }
-    if (nbd_negotiate_write(ioc, exp->name, name_len) != name_len) {
-        LOG("write failed (buffer)");
+    if (nbd_negotiate_write(ioc, name, name_len) != name_len) {
+        LOG("write failed (name buffer)");
+        return -EINVAL;
+    }
+    if (nbd_negotiate_write(ioc, desc, desc_len) != desc_len) {
+        LOG("write failed (description buffer)");
         return -EINVAL;
     }
     return 0;
 }
 
+/* Process the NBD_OPT_LIST command, with a potential series of replies.
+ * Return -errno on error, 0 on success. */
 static int nbd_negotiate_handle_list(NBDClient *client, uint32_t length)
 {
     NBDExport *exp;
@@ -269,8 +312,9 @@ static int nbd_negotiate_handle_list(NBDClient *client, uint32_t length)
         if (nbd_negotiate_drop_sync(client->ioc, length) != length) {
             return -EIO;
         }
-        return nbd_negotiate_send_rep(client->ioc,
-                                      NBD_REP_ERR_INVALID, NBD_OPT_LIST);
+        return nbd_negotiate_send_rep_err(client->ioc,
+                                          NBD_REP_ERR_INVALID, NBD_OPT_LIST,
+                                          "OPT_LIST should not have length");
     }
 
     /* For each export, send a NBD_REP_SERVER reply. */
@@ -317,7 +361,8 @@ fail:
     return rc;
 }
 
-
+/* Handle NBD_OPT_STARTTLS. Return NULL to drop connection, or else the
+ * new channel for all further (now-encrypted) communication. */
 static QIOChannel *nbd_negotiate_handle_starttls(NBDClient *client,
                                                  uint32_t length)
 {
@@ -331,7 +376,8 @@ static QIOChannel *nbd_negotiate_handle_starttls(NBDClient *client,
         if (nbd_negotiate_drop_sync(ioc, length) != length) {
             return NULL;
         }
-        nbd_negotiate_send_rep(ioc, NBD_REP_ERR_INVALID, NBD_OPT_STARTTLS);
+        nbd_negotiate_send_rep_err(ioc, NBD_REP_ERR_INVALID, NBD_OPT_STARTTLS,
+                                   "OPT_STARTTLS should not have length");
         return NULL;
     }
 
@@ -348,6 +394,7 @@ static QIOChannel *nbd_negotiate_handle_starttls(NBDClient *client,
         return NULL;
     }
 
+    qio_channel_set_name(QIO_CHANNEL(tioc), "nbd-server-tls");
     TRACE("Starting TLS handshake");
     data.loop = g_main_loop_new(g_main_context_default(), FALSE);
     qio_channel_tls_handshake(tioc,
@@ -369,6 +416,8 @@ static QIOChannel *nbd_negotiate_handle_starttls(NBDClient *client,
 }
 
 
+/* Process all NBD_OPT_* client option commands.
+ * Return -errno on error, 0 on success. */
 static int nbd_negotiate_options(NBDClient *client)
 {
     uint32_t flags;
@@ -399,6 +448,11 @@ static int nbd_negotiate_options(NBDClient *client)
         TRACE("Client supports fixed newstyle handshake");
         fixedNewstyle = true;
         flags &= ~NBD_FLAG_C_FIXED_NEWSTYLE;
+    }
+    if (flags & NBD_FLAG_C_NO_ZEROES) {
+        TRACE("Client supports no zeroes at handshake end");
+        client->no_zeroes = true;
+        flags &= ~NBD_FLAG_C_NO_ZEROES;
     }
     if (flags != 0) {
         TRACE("Unknown client flags 0x%" PRIx32 " received", flags);
@@ -459,15 +513,21 @@ static int nbd_negotiate_options(NBDClient *client)
                 return -EINVAL;
 
             default:
-                TRACE("Option 0x%" PRIx32 " not permitted before TLS",
-                      clientflags);
                 if (nbd_negotiate_drop_sync(client->ioc, length) != length) {
                     return -EIO;
                 }
-                ret = nbd_negotiate_send_rep(client->ioc, NBD_REP_ERR_TLS_REQD,
-                                             clientflags);
+                ret = nbd_negotiate_send_rep_err(client->ioc,
+                                                 NBD_REP_ERR_TLS_REQD,
+                                                 clientflags,
+                                                 "Option 0x%" PRIx32
+                                                 "not permitted before TLS",
+                                                 clientflags);
                 if (ret < 0) {
                     return ret;
+                }
+                /* Let the client keep trying, unless they asked to quit */
+                if (clientflags == NBD_OPT_ABORT) {
+                    return -EINVAL;
                 }
                 break;
             }
@@ -481,6 +541,10 @@ static int nbd_negotiate_options(NBDClient *client)
                 break;
 
             case NBD_OPT_ABORT:
+                /* NBD spec says we must try to reply before
+                 * disconnecting, but that we must also tolerate
+                 * guests that don't wait for our reply. */
+                nbd_negotiate_send_rep(client->ioc, NBD_REP_ACK, clientflags);
                 return -EINVAL;
 
             case NBD_OPT_EXPORT_NAME:
@@ -491,27 +555,30 @@ static int nbd_negotiate_options(NBDClient *client)
                     return -EIO;
                 }
                 if (client->tlscreds) {
-                    TRACE("TLS already enabled");
-                    ret = nbd_negotiate_send_rep(client->ioc,
-                                                 NBD_REP_ERR_INVALID,
-                                                 clientflags);
+                    ret = nbd_negotiate_send_rep_err(client->ioc,
+                                                     NBD_REP_ERR_INVALID,
+                                                     clientflags,
+                                                     "TLS already enabled");
                 } else {
-                    TRACE("TLS not configured");
-                    ret = nbd_negotiate_send_rep(client->ioc,
-                                                 NBD_REP_ERR_POLICY,
-                                                 clientflags);
+                    ret = nbd_negotiate_send_rep_err(client->ioc,
+                                                     NBD_REP_ERR_POLICY,
+                                                     clientflags,
+                                                     "TLS not configured");
                 }
                 if (ret < 0) {
                     return ret;
                 }
                 break;
             default:
-                TRACE("Unsupported option 0x%" PRIx32, clientflags);
                 if (nbd_negotiate_drop_sync(client->ioc, length) != length) {
                     return -EIO;
                 }
-                ret = nbd_negotiate_send_rep(client->ioc, NBD_REP_ERR_UNSUP,
-                                             clientflags);
+                ret = nbd_negotiate_send_rep_err(client->ioc,
+                                                 NBD_REP_ERR_UNSUP,
+                                                 clientflags,
+                                                 "Unsupported option 0x%"
+                                                 PRIx32,
+                                                 clientflags);
                 if (ret < 0) {
                     return ret;
                 }
@@ -545,8 +612,10 @@ static coroutine_fn int nbd_negotiate(NBDClientNewData *data)
     char buf[8 + 8 + 8 + 128];
     int rc;
     const uint16_t myflags = (NBD_FLAG_HAS_FLAGS | NBD_FLAG_SEND_TRIM |
-                              NBD_FLAG_SEND_FLUSH | NBD_FLAG_SEND_FUA);
+                              NBD_FLAG_SEND_FLUSH | NBD_FLAG_SEND_FUA |
+                              NBD_FLAG_SEND_WRITE_ZEROES);
     bool oldStyle;
+    size_t len;
 
     /* Old style negotiation header without options
         [ 0 ..   7]   passwd       ("NBDMAGIC")
@@ -563,7 +632,7 @@ static coroutine_fn int nbd_negotiate(NBDClientNewData *data)
         ....options sent....
         [18 ..  25]   size
         [26 ..  27]   export flags
-        [28 .. 151]   reserved     (0)
+        [28 .. 151]   reserved     (0, omit if no_zeroes)
      */
 
     qio_channel_set_blocking(client->ioc, false, NULL);
@@ -582,7 +651,7 @@ static coroutine_fn int nbd_negotiate(NBDClientNewData *data)
         stw_be_p(buf + 26, client->exp->nbdflags | myflags);
     } else {
         stq_be_p(buf + 8, NBD_OPTS_MAGIC);
-        stw_be_p(buf + 16, NBD_FLAG_FIXED_NEWSTYLE);
+        stw_be_p(buf + 16, NBD_FLAG_FIXED_NEWSTYLE | NBD_FLAG_NO_ZEROES);
     }
 
     if (oldStyle) {
@@ -609,8 +678,8 @@ static coroutine_fn int nbd_negotiate(NBDClientNewData *data)
               client->exp->size, client->exp->nbdflags | myflags);
         stq_be_p(buf + 18, client->exp->size);
         stw_be_p(buf + 26, client->exp->nbdflags | myflags);
-        if (nbd_negotiate_write(client->ioc, buf + 18, sizeof(buf) - 18) !=
-            sizeof(buf) - 18) {
+        len = client->no_zeroes ? 10 : sizeof(buf) - 18;
+        if (nbd_negotiate_write(client->ioc, buf + 18, len) != len) {
             LOG("write failed");
             goto fail;
         }
@@ -622,7 +691,7 @@ fail:
     return rc;
 }
 
-static ssize_t nbd_receive_request(QIOChannel *ioc, struct nbd_request *request)
+static ssize_t nbd_receive_request(QIOChannel *ioc, NBDRequest *request)
 {
     uint8_t buf[NBD_REQUEST_SIZE];
     uint32_t magic;
@@ -640,21 +709,23 @@ static ssize_t nbd_receive_request(QIOChannel *ioc, struct nbd_request *request)
 
     /* Request
        [ 0 ..  3]   magic   (NBD_REQUEST_MAGIC)
-       [ 4 ..  7]   type    (0 == READ, 1 == WRITE)
+       [ 4 ..  5]   flags   (NBD_CMD_FLAG_FUA, ...)
+       [ 6 ..  7]   type    (NBD_CMD_READ, ...)
        [ 8 .. 15]   handle
        [16 .. 23]   from
        [24 .. 27]   len
      */
 
     magic = ldl_be_p(buf);
-    request->type   = ldl_be_p(buf + 4);
+    request->flags  = lduw_be_p(buf + 4);
+    request->type   = lduw_be_p(buf + 6);
     request->handle = ldq_be_p(buf + 8);
     request->from   = ldq_be_p(buf + 16);
     request->len    = ldl_be_p(buf + 24);
 
-    TRACE("Got request: { magic = 0x%" PRIx32 ", .type = %" PRIx32
-          ", from = %" PRIu64 " , len = %" PRIu32 " }",
-          magic, request->type, request->from, request->len);
+    TRACE("Got request: { magic = 0x%" PRIx32 ", .flags = %" PRIx16
+          ", .type = %" PRIx16 ", from = %" PRIu64 ", len = %" PRIu32 " }",
+          magic, request->flags, request->type, request->from, request->len);
 
     if (magic != NBD_REQUEST_MAGIC) {
         LOG("invalid magic (got 0x%" PRIx32 ")", magic);
@@ -663,7 +734,7 @@ static ssize_t nbd_receive_request(QIOChannel *ioc, struct nbd_request *request)
     return 0;
 }
 
-static ssize_t nbd_send_reply(QIOChannel *ioc, struct nbd_reply *reply)
+static ssize_t nbd_send_reply(QIOChannel *ioc, NBDReply *reply)
 {
     uint8_t buf[NBD_REPLY_SIZE];
     ssize_t ret;
@@ -710,7 +781,7 @@ void nbd_client_put(NBDClient *client)
          */
         assert(client->closing);
 
-        nbd_unset_handlers(client);
+        qio_channel_detach_aio_context(client->ioc);
         object_unref(OBJECT(client->sioc));
         object_unref(OBJECT(client->ioc));
         if (client->tlscreds) {
@@ -745,21 +816,20 @@ static void client_close(NBDClient *client)
     }
 }
 
-static NBDRequest *nbd_request_get(NBDClient *client)
+static NBDRequestData *nbd_request_get(NBDClient *client)
 {
-    NBDRequest *req;
+    NBDRequestData *req;
 
     assert(client->nb_requests <= MAX_NBD_REQUESTS - 1);
     client->nb_requests++;
-    nbd_update_can_read(client);
 
-    req = g_new0(NBDRequest, 1);
+    req = g_new0(NBDRequestData, 1);
     nbd_client_get(client);
     req->client = client;
     return req;
 }
 
-static void nbd_request_put(NBDRequest *req)
+static void nbd_request_put(NBDRequestData *req)
 {
     NBDClient *client = req->client;
 
@@ -769,7 +839,8 @@ static void nbd_request_put(NBDRequest *req)
     g_free(req);
 
     client->nb_requests--;
-    nbd_update_can_read(client);
+    nbd_client_receive_next_request(client);
+
     nbd_client_put(client);
 }
 
@@ -783,7 +854,13 @@ static void blk_aio_attached(AioContext *ctx, void *opaque)
     exp->ctx = ctx;
 
     QTAILQ_FOREACH(client, &exp->clients, next) {
-        nbd_set_handlers(client);
+        qio_channel_attach_aio_context(client->ioc, ctx);
+        if (client->recv_coroutine) {
+            aio_co_schedule(ctx, client->recv_coroutine);
+        }
+        if (client->send_coroutine) {
+            aio_co_schedule(ctx, client->send_coroutine);
+        }
     }
 }
 
@@ -795,7 +872,7 @@ static void blk_aio_detach(void *opaque)
     TRACE("Export %s: Detaching clients from AIO context %p\n", exp->name, exp->ctx);
 
     QTAILQ_FOREACH(client, &exp->clients, next) {
-        nbd_unset_handlers(client);
+        qio_channel_detach_aio_context(client->ioc);
     }
 
     exp->ctx = NULL;
@@ -807,11 +884,30 @@ static void nbd_eject_notifier(Notifier *n, void *data)
     nbd_export_close(exp);
 }
 
-NBDExport *nbd_export_new(BlockBackend *blk, off_t dev_offset, off_t size,
+NBDExport *nbd_export_new(BlockDriverState *bs, off_t dev_offset, off_t size,
                           uint16_t nbdflags, void (*close)(NBDExport *),
+                          bool writethrough, BlockBackend *on_eject_blk,
                           Error **errp)
 {
+    BlockBackend *blk;
     NBDExport *exp = g_malloc0(sizeof(NBDExport));
+    uint64_t perm;
+    int ret;
+
+    /* Don't allow resize while the NBD server is running, otherwise we don't
+     * care what happens with the node. */
+    perm = BLK_PERM_CONSISTENT_READ;
+    if ((nbdflags & NBD_FLAG_READ_ONLY) == 0) {
+        perm |= BLK_PERM_WRITE;
+    }
+    blk = blk_new(perm, BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE_UNCHANGED |
+                        BLK_PERM_WRITE | BLK_PERM_GRAPH_MOD);
+    ret = blk_insert_bs(blk, bs, errp);
+    if (ret < 0) {
+        goto fail;
+    }
+    blk_set_enable_write_cache(blk, !writethrough);
+
     exp->refcount = 1;
     QTAILQ_INIT(&exp->clients);
     exp->blk = blk;
@@ -827,11 +923,14 @@ NBDExport *nbd_export_new(BlockBackend *blk, off_t dev_offset, off_t size,
 
     exp->close = close;
     exp->ctx = blk_get_aio_context(blk);
-    blk_ref(blk);
     blk_add_aio_context_notifier(blk, blk_aio_attached, blk_aio_detach, exp);
 
-    exp->eject_notifier.notify = nbd_eject_notifier;
-    blk_add_remove_bs_notifier(blk, &exp->eject_notifier);
+    if (on_eject_blk) {
+        blk_ref(on_eject_blk);
+        exp->eject_notifier_blk = on_eject_blk;
+        exp->eject_notifier.notify = nbd_eject_notifier;
+        blk_add_remove_bs_notifier(on_eject_blk, &exp->eject_notifier);
+    }
 
     /*
      * NBD exports are used for non-shared storage migration.  Make sure
@@ -844,6 +943,7 @@ NBDExport *nbd_export_new(BlockBackend *blk, off_t dev_offset, off_t size,
     return exp;
 
 fail:
+    blk_unref(blk);
     g_free(exp);
     return NULL;
 }
@@ -881,6 +981,12 @@ void nbd_export_set_name(NBDExport *exp, const char *name)
     nbd_export_put(exp);
 }
 
+void nbd_export_set_description(NBDExport *exp, const char *description)
+{
+    g_free(exp->description);
+    exp->description = g_strdup(description);
+}
+
 void nbd_export_close(NBDExport *exp)
 {
     NBDClient *client, *next;
@@ -890,6 +996,7 @@ void nbd_export_close(NBDExport *exp)
         client_close(client);
     }
     nbd_export_set_name(exp, NULL);
+    nbd_export_set_description(exp, NULL);
     nbd_export_put(exp);
 }
 
@@ -908,13 +1015,17 @@ void nbd_export_put(NBDExport *exp)
 
     if (--exp->refcount == 0) {
         assert(exp->name == NULL);
+        assert(exp->description == NULL);
 
         if (exp->close) {
             exp->close(exp);
         }
 
         if (exp->blk) {
-            notifier_remove(&exp->eject_notifier);
+            if (exp->eject_notifier_blk) {
+                notifier_remove(&exp->eject_notifier);
+                blk_unref(exp->eject_notifier_blk);
+            }
             blk_remove_aio_context_notifier(exp->blk, blk_aio_attached,
                                             blk_aio_detach, exp);
             blk_unref(exp->blk);
@@ -939,7 +1050,7 @@ void nbd_export_close_all(void)
     }
 }
 
-static ssize_t nbd_co_send_reply(NBDRequest *req, struct nbd_reply *reply,
+static ssize_t nbd_co_send_reply(NBDRequestData *req, NBDReply *reply,
                                  int len)
 {
     NBDClient *client = req->client;
@@ -948,7 +1059,6 @@ static ssize_t nbd_co_send_reply(NBDRequest *req, struct nbd_reply *reply,
     g_assert(qemu_in_coroutine());
     qemu_co_mutex_lock(&client->send_lock);
     client->send_coroutine = qemu_coroutine_self();
-    nbd_set_handlers(client);
 
     if (!len) {
         rc = nbd_send_reply(client->ioc, reply);
@@ -965,7 +1075,6 @@ static ssize_t nbd_co_send_reply(NBDRequest *req, struct nbd_reply *reply,
     }
 
     client->send_coroutine = NULL;
-    nbd_set_handlers(client);
     qemu_co_mutex_unlock(&client->send_lock);
     return rc;
 }
@@ -975,17 +1084,14 @@ static ssize_t nbd_co_send_reply(NBDRequest *req, struct nbd_reply *reply,
  * and any other negative value to report an error to the client
  * (although the caller may still need to disconnect after reporting
  * the error).  */
-static ssize_t nbd_co_receive_request(NBDRequest *req,
-                                      struct nbd_request *request)
+static ssize_t nbd_co_receive_request(NBDRequestData *req,
+                                      NBDRequest *request)
 {
     NBDClient *client = req->client;
-    uint32_t command;
     ssize_t rc;
 
     g_assert(qemu_in_coroutine());
-    client->recv_coroutine = qemu_coroutine_self();
-    nbd_update_can_read(client);
-
+    assert(client->recv_coroutine == qemu_coroutine_self());
     rc = nbd_receive_request(client->ioc, request);
     if (rc < 0) {
         if (rc != -EAGAIN) {
@@ -996,13 +1102,12 @@ static ssize_t nbd_co_receive_request(NBDRequest *req,
 
     TRACE("Decoding type");
 
-    command = request->type & NBD_CMD_MASK_COMMAND;
-    if (command != NBD_CMD_WRITE) {
+    if (request->type != NBD_CMD_WRITE) {
         /* No payload, we are ready to read the next request.  */
         req->complete = true;
     }
 
-    if (command == NBD_CMD_DISC) {
+    if (request->type == NBD_CMD_DISC) {
         /* Special case: we're going to disconnect without a reply,
          * whether or not flags, from, or len are bogus */
         TRACE("Request type is DISCONNECT");
@@ -1019,7 +1124,7 @@ static ssize_t nbd_co_receive_request(NBDRequest *req,
         goto out;
     }
 
-    if (command == NBD_CMD_READ || command == NBD_CMD_WRITE) {
+    if (request->type == NBD_CMD_READ || request->type == NBD_CMD_WRITE) {
         if (request->len > NBD_MAX_BUFFER_SIZE) {
             LOG("len (%" PRIu32" ) is larger than max len (%u)",
                 request->len, NBD_MAX_BUFFER_SIZE);
@@ -1033,7 +1138,7 @@ static ssize_t nbd_co_receive_request(NBDRequest *req,
             goto out;
         }
     }
-    if (command == NBD_CMD_WRITE) {
+    if (request->type == NBD_CMD_WRITE) {
         TRACE("Reading %" PRIu32 " byte(s)", request->len);
 
         if (read_sync(client->ioc, req->data, request->len) != request->len) {
@@ -1049,12 +1154,17 @@ static ssize_t nbd_co_receive_request(NBDRequest *req,
         LOG("operation past EOF; From: %" PRIu64 ", Len: %" PRIu32
             ", Size: %" PRIu64, request->from, request->len,
             (uint64_t)client->exp->size);
-        rc = command == NBD_CMD_WRITE ? -ENOSPC : -EINVAL;
+        rc = request->type == NBD_CMD_WRITE ? -ENOSPC : -EINVAL;
         goto out;
     }
-    if (request->type & ~NBD_CMD_MASK_COMMAND & ~NBD_CMD_FLAG_FUA) {
-        LOG("unsupported flags (got 0x%x)",
-            request->type & ~NBD_CMD_MASK_COMMAND);
+    if (request->flags & ~(NBD_CMD_FLAG_FUA | NBD_CMD_FLAG_NO_HOLE)) {
+        LOG("unsupported flags (got 0x%x)", request->flags);
+        rc = -EINVAL;
+        goto out;
+    }
+    if (request->type != NBD_CMD_WRITE_ZEROES &&
+        (request->flags & NBD_CMD_FLAG_NO_HOLE)) {
+        LOG("unexpected flags (got 0x%x)", request->flags);
         rc = -EINVAL;
         goto out;
     }
@@ -1063,24 +1173,25 @@ static ssize_t nbd_co_receive_request(NBDRequest *req,
 
 out:
     client->recv_coroutine = NULL;
-    nbd_update_can_read(client);
+    nbd_client_receive_next_request(client);
 
     return rc;
 }
 
-static void nbd_trip(void *opaque)
+/* Owns a reference to the NBDClient passed as opaque.  */
+static coroutine_fn void nbd_trip(void *opaque)
 {
     NBDClient *client = opaque;
     NBDExport *exp = client->exp;
-    NBDRequest *req;
-    struct nbd_request request;
-    struct nbd_reply reply;
+    NBDRequestData *req;
+    NBDRequest request = { 0 };    /* GCC thinks it can be used uninitialized */
+    NBDReply reply;
     ssize_t ret;
-    uint32_t command;
     int flags;
 
     TRACE("Reading request.");
     if (client->closing) {
+        nbd_client_put(client);
         return;
     }
 
@@ -1100,7 +1211,6 @@ static void nbd_trip(void *opaque)
         reply.error = -ret;
         goto error_reply;
     }
-    command = request.type & NBD_CMD_MASK_COMMAND;
 
     if (client->closing) {
         /*
@@ -1110,11 +1220,12 @@ static void nbd_trip(void *opaque)
         goto done;
     }
 
-    switch (command) {
+    switch (request.type) {
     case NBD_CMD_READ:
         TRACE("Request type is READ");
 
-        if (request.type & NBD_CMD_FLAG_FUA) {
+        /* XXX: NBD Protocol only documents use of FUA with WRITE */
+        if (request.flags & NBD_CMD_FLAG_FUA) {
             ret = blk_co_flush(exp->blk);
             if (ret < 0) {
                 LOG("flush failed");
@@ -1147,11 +1258,42 @@ static void nbd_trip(void *opaque)
         TRACE("Writing to device");
 
         flags = 0;
-        if (request.type & NBD_CMD_FLAG_FUA) {
+        if (request.flags & NBD_CMD_FLAG_FUA) {
             flags |= BDRV_REQ_FUA;
         }
         ret = blk_pwrite(exp->blk, request.from + exp->dev_offset,
                          req->data, request.len, flags);
+        if (ret < 0) {
+            LOG("writing to file failed");
+            reply.error = -ret;
+            goto error_reply;
+        }
+
+        if (nbd_co_send_reply(req, &reply, 0) < 0) {
+            goto out;
+        }
+        break;
+
+    case NBD_CMD_WRITE_ZEROES:
+        TRACE("Request type is WRITE_ZEROES");
+
+        if (exp->nbdflags & NBD_FLAG_READ_ONLY) {
+            TRACE("Server is read-only, return error");
+            reply.error = EROFS;
+            goto error_reply;
+        }
+
+        TRACE("Writing to device");
+
+        flags = 0;
+        if (request.flags & NBD_CMD_FLAG_FUA) {
+            flags |= BDRV_REQ_FUA;
+        }
+        if (!(request.flags & NBD_CMD_FLAG_NO_HOLE)) {
+            flags |= BDRV_REQ_MAY_UNMAP;
+        }
+        ret = blk_pwrite_zeroes(exp->blk, request.from + exp->dev_offset,
+                                request.len, flags);
         if (ret < 0) {
             LOG("writing to file failed");
             reply.error = -ret;
@@ -1208,61 +1350,21 @@ static void nbd_trip(void *opaque)
 
 done:
     nbd_request_put(req);
+    nbd_client_put(client);
     return;
 
 out:
     nbd_request_put(req);
     client_close(client);
+    nbd_client_put(client);
 }
 
-static void nbd_read(void *opaque)
+static void nbd_client_receive_next_request(NBDClient *client)
 {
-    NBDClient *client = opaque;
-
-    if (client->recv_coroutine) {
-        qemu_coroutine_enter(client->recv_coroutine);
-    } else {
-        qemu_coroutine_enter(qemu_coroutine_create(nbd_trip, client));
-    }
-}
-
-static void nbd_restart_write(void *opaque)
-{
-    NBDClient *client = opaque;
-
-    qemu_coroutine_enter(client->send_coroutine);
-}
-
-static void nbd_set_handlers(NBDClient *client)
-{
-    if (client->exp && client->exp->ctx) {
-        aio_set_fd_handler(client->exp->ctx, client->sioc->fd,
-                           true,
-                           client->can_read ? nbd_read : NULL,
-                           client->send_coroutine ? nbd_restart_write : NULL,
-                           client);
-    }
-}
-
-static void nbd_unset_handlers(NBDClient *client)
-{
-    if (client->exp && client->exp->ctx) {
-        aio_set_fd_handler(client->exp->ctx, client->sioc->fd,
-                           true, NULL, NULL, NULL);
-    }
-}
-
-static void nbd_update_can_read(NBDClient *client)
-{
-    bool can_read = client->recv_coroutine ||
-                    client->nb_requests < MAX_NBD_REQUESTS;
-
-    if (can_read != client->can_read) {
-        client->can_read = can_read;
-        nbd_set_handlers(client);
-
-        /* There is no need to invoke aio_notify(), since aio_set_fd_handler()
-         * in nbd_set_handlers() will have taken care of that */
+    if (!client->recv_coroutine && client->nb_requests < MAX_NBD_REQUESTS) {
+        nbd_client_get(client);
+        client->recv_coroutine = qemu_coroutine_create(nbd_trip, client);
+        aio_co_schedule(client->exp->ctx, client->recv_coroutine);
     }
 }
 
@@ -1280,11 +1382,13 @@ static coroutine_fn void nbd_co_client_start(void *opaque)
         goto out;
     }
     qemu_co_mutex_init(&client->send_lock);
-    nbd_set_handlers(client);
 
     if (exp) {
         QTAILQ_INSERT_TAIL(&exp->clients, client, next);
     }
+
+    nbd_client_receive_next_request(client);
+
 out:
     g_free(data);
 }
@@ -1310,7 +1414,6 @@ void nbd_client_new(NBDExport *exp,
     object_ref(OBJECT(client->sioc));
     client->ioc = QIO_CHANNEL(sioc);
     object_ref(OBJECT(client->ioc));
-    client->can_read = true;
     client->close = close_fn;
 
     data->client = client;

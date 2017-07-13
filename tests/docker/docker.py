@@ -21,9 +21,18 @@ import uuid
 import argparse
 import tempfile
 import re
+import signal
 from tarfile import TarFile, TarInfo
 from StringIO import StringIO
 from shutil import copy, rmtree
+from pwd import getpwuid
+
+
+FILTERED_ENV_NAMES = ['ftp_proxy', 'http_proxy', 'https_proxy']
+
+
+DEVNULL = open(os.devnull, 'wb')
+
 
 def _text_checksum(text):
     """Calculate a digest string unique to the text content"""
@@ -33,10 +42,12 @@ def _guess_docker_command():
     """ Guess a working docker command or raise exception if not found"""
     commands = [["docker"], ["sudo", "-n", "docker"]]
     for cmd in commands:
-        if subprocess.call(cmd + ["images"],
-                           stdout=subprocess.PIPE,
-                           stderr=subprocess.PIPE) == 0:
-            return cmd
+        try:
+            if subprocess.call(cmd + ["images"],
+                               stdout=DEVNULL, stderr=DEVNULL) == 0:
+                return cmd
+        except OSError:
+            pass
     commands_txt = "\n".join(["  " + " ".join(x) for x in commands])
     raise Exception("Cannot find working docker command. Tried:\n%s" % \
                     commands_txt)
@@ -95,10 +106,12 @@ class Docker(object):
         self._command = _guess_docker_command()
         self._instances = []
         atexit.register(self._kill_instances)
+        signal.signal(signal.SIGTERM, self._kill_instances)
+        signal.signal(signal.SIGHUP, self._kill_instances)
 
     def _do(self, cmd, quiet=True, infile=None, **kwargs):
         if quiet:
-            kwargs["stdout"] = subprocess.PIPE
+            kwargs["stdout"] = DEVNULL
         if infile:
             kwargs["stdin"] = infile
         return subprocess.call(self._command + cmd, **kwargs)
@@ -127,7 +140,7 @@ class Docker(object):
         self._do_kill_instances(False, False)
         return 0
 
-    def _kill_instances(self):
+    def _kill_instances(self, *args, **kwargs):
         return self._do_kill_instances(True)
 
     def _output(self, cmd, **kwargs):
@@ -140,12 +153,20 @@ class Docker(object):
         labels = json.loads(resp)[0]["Config"].get("Labels", {})
         return labels.get("com.qemu.dockerfile-checksum", "")
 
-    def build_image(self, tag, docker_dir, dockerfile, quiet=True, argv=None):
+    def build_image(self, tag, docker_dir, dockerfile,
+                    quiet=True, user=False, argv=None):
         if argv == None:
             argv = []
 
         tmp_df = tempfile.NamedTemporaryFile(dir=docker_dir, suffix=".docker")
         tmp_df.write(dockerfile)
+
+        if user:
+            uid = os.getuid()
+            uname = getpwuid(uid).pw_name
+            tmp_df.write("\n")
+            tmp_df.write("RUN id %s 2>/dev/null || useradd -u %d -U %s" %
+                         (uname, uid, uname))
 
         tmp_df.write("\n")
         tmp_df.write("LABEL com.qemu.dockerfile-checksum=%s" %
@@ -216,6 +237,9 @@ class BuildCommand(SubCommand):
                             help="""Specify a binary that will be copied to the
                             container together with all its dependent
                             libraries""")
+        parser.add_argument("--add-current-user", "-u", dest="user",
+                            action="store_true",
+                            help="Add the current user to image's passwd")
         parser.add_argument("tag",
                             help="Image Tag")
         parser.add_argument("dockerfile",
@@ -236,8 +260,9 @@ class BuildCommand(SubCommand):
             # Is there a .pre file to run in the build context?
             docker_pre = os.path.splitext(args.dockerfile)[0]+".pre"
             if os.path.exists(docker_pre):
+                stdout = DEVNULL if args.quiet else None
                 rc = subprocess.call(os.path.realpath(docker_pre),
-                                     cwd=docker_dir)
+                                     cwd=docker_dir, stdout=stdout)
                 if rc == 3:
                     print "Skip"
                     return 0
@@ -250,8 +275,11 @@ class BuildCommand(SubCommand):
                 _copy_binary_with_libs(args.include_executable,
                                        docker_dir)
 
+            argv += ["--build-arg=" + k.lower() + "=" + v
+                        for k, v in os.environ.iteritems()
+                        if k.lower() in FILTERED_ENV_NAMES]
             dkr.build_image(tag, docker_dir, dockerfile,
-                            quiet=args.quiet, argv=argv)
+                            quiet=args.quiet, user=args.user, argv=argv)
 
             rmtree(docker_dir)
 

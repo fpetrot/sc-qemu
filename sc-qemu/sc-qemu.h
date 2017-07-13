@@ -18,17 +18,12 @@ extern "C" {
 #include "typedefs.h"
 
 #include "sc-object.h"
-#include "sc-qemu-char-dev.h"
 
 struct qemu_import {
     sc_qemu_cpu_loop_fn                cpu_loop;              /* < Run the CPUs */
     sc_qemu_map_io_fn                  map_io;                /* < Map a memory area as io */
     sc_qemu_map_dmi_fn                 map_dmi;               /* < Map a memory area with direct memory access */
     sc_qemu_start_gdbserver_fn         start_gdbserver;       /* < Start a gdb server on the given port */
-
-    sc_qemu_char_dev_create_fn          char_dev_create;        /* < Create a qemu char device */
-    sc_qemu_char_dev_write_fn           char_dev_write;         /* < Write to a qemu char device */
-    sc_qemu_char_dev_register_read_fn   char_dev_register_read; /* < Register a read callback for a qemu char device */
 
     sc_qemu_object_new_fn               object_new;               /* < Create a new QEMU object */
     sc_qemu_object_property_set_bool_fn object_property_set_bool; /* < Set a bool property on object */

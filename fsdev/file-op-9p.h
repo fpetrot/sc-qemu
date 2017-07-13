@@ -17,6 +17,7 @@
 #include <dirent.h>
 #include <utime.h>
 #include <sys/vfs.h>
+#include "qemu-fsdev-throttle.h"
 
 #define SM_LOCAL_MODE_BITS    0600
 #define SM_LOCAL_DIR_MODE_BITS    0700
@@ -74,6 +75,7 @@ typedef struct FsDriverEntry {
     char *path;
     int export_flags;
     FileOperations *ops;
+    FsThrottle fst;
 } FsDriverEntry;
 
 typedef struct FsContext
@@ -83,6 +85,7 @@ typedef struct FsContext
     int export_flags;
     struct xattr_operations **xops;
     struct extended_ops exops;
+    FsThrottle *fst;
     /* fs driver specific data */
     void *private;
 } FsContext;
@@ -100,6 +103,7 @@ struct FileOperations
 {
     int (*parse_opts)(QemuOpts *, struct FsDriverEntry *);
     int (*init)(struct FsContext *);
+    void (*cleanup)(struct FsContext *);
     int (*lstat)(FsContext *, V9fsPath *, struct stat *);
     ssize_t (*readlink)(FsContext *, V9fsPath *, char *, size_t);
     int (*chmod)(FsContext *, V9fsPath *, FsCred *);

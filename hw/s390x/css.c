@@ -141,7 +141,8 @@ out_err:
 int css_create_css_image(uint8_t cssid, bool default_image)
 {
     trace_css_new_image(cssid, default_image ? "(default)" : "");
-    if (cssid > MAX_CSSID) {
+    /* 255 is reserved */
+    if (cssid == 255) {
         return -EINVAL;
     }
     if (channel_subsys.css[cssid]) {
@@ -367,13 +368,16 @@ static CCW1 copy_ccw_from_guest(hwaddr addr, bool fmt1)
         ret.cda = be32_to_cpu(tmp1.cda);
     } else {
         cpu_physical_memory_read(addr, &tmp0, sizeof(tmp0));
-        ret.cmd_code = tmp0.cmd_code;
-        ret.flags = tmp0.flags;
-        ret.count = be16_to_cpu(tmp0.count);
-        ret.cda = be16_to_cpu(tmp0.cda1) | (tmp0.cda0 << 16);
-        if ((ret.cmd_code & 0x0f) == CCW_CMD_TIC) {
-            ret.cmd_code &= 0x0f;
+        if ((tmp0.cmd_code & 0x0f) == CCW_CMD_TIC) {
+            ret.cmd_code = CCW_CMD_TIC;
+            ret.flags = 0;
+            ret.count = 0;
+        } else {
+            ret.cmd_code = tmp0.cmd_code;
+            ret.flags = tmp0.flags;
+            ret.count = be16_to_cpu(tmp0.count);
         }
+        ret.cda = be16_to_cpu(tmp0.cda1) | (tmp0.cda0 << 16);
     }
     return ret;
 }
@@ -774,7 +778,7 @@ int css_do_xsch(SubchDev *sch)
     PMCW *p = &sch->curr_status.pmcw;
     int ret;
 
-    if (!(p->flags & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA))) {
+    if (~(p->flags) & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA)) {
         ret = -ENODEV;
         goto out;
     }
@@ -814,7 +818,7 @@ int css_do_csch(SubchDev *sch)
     PMCW *p = &sch->curr_status.pmcw;
     int ret;
 
-    if (!(p->flags & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA))) {
+    if (~(p->flags) & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA)) {
         ret = -ENODEV;
         goto out;
     }
@@ -836,7 +840,7 @@ int css_do_hsch(SubchDev *sch)
     PMCW *p = &sch->curr_status.pmcw;
     int ret;
 
-    if (!(p->flags & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA))) {
+    if (~(p->flags) & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA)) {
         ret = -ENODEV;
         goto out;
     }
@@ -912,7 +916,7 @@ int css_do_ssch(SubchDev *sch, ORB *orb)
     PMCW *p = &sch->curr_status.pmcw;
     int ret;
 
-    if (!(p->flags & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA))) {
+    if (~(p->flags) & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA)) {
         ret = -ENODEV;
         goto out;
     }
@@ -989,7 +993,7 @@ int css_do_tsch_get_irb(SubchDev *sch, IRB *target_irb, int *irb_len)
     uint16_t stctl;
     IRB irb;
 
-    if (!(p->flags & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA))) {
+    if (~(p->flags) & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA)) {
         return 3;
     }
 
@@ -1195,7 +1199,7 @@ int css_do_rsch(SubchDev *sch)
     PMCW *p = &sch->curr_status.pmcw;
     int ret;
 
-    if (!(p->flags & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA))) {
+    if (~(p->flags) & (PMCW_FLAGS_MASK_DNV | PMCW_FLAGS_MASK_ENA)) {
         ret = -ENODEV;
         goto out;
     }
@@ -1267,7 +1271,7 @@ bool css_schid_final(int m, uint8_t cssid, uint8_t ssid, uint16_t schid)
     uint8_t real_cssid;
 
     real_cssid = (!m && (cssid == 0)) ? channel_subsys.default_cssid : cssid;
-    if (real_cssid > MAX_CSSID || ssid > MAX_SSID ||
+    if (ssid > MAX_SSID ||
         !channel_subsys.css[real_cssid] ||
         !channel_subsys.css[real_cssid]->sch_set[ssid]) {
         return true;
@@ -1282,9 +1286,6 @@ static int css_add_virtual_chpid(uint8_t cssid, uint8_t chpid, uint8_t type)
     CssImage *css;
 
     trace_css_chpid_add(cssid, chpid, type);
-    if (cssid > MAX_CSSID) {
-        return -EINVAL;
-    }
     css = channel_subsys.css[cssid];
     if (!css) {
         return -EINVAL;
@@ -1674,12 +1675,27 @@ void subch_device_save(SubchDev *s, QEMUFile *f)
 
 int subch_device_load(SubchDev *s, QEMUFile *f)
 {
+    SubchDev *old_s;
+    uint16_t old_schid = s->schid;
     int i;
 
     s->cssid = qemu_get_byte(f);
     s->ssid = qemu_get_byte(f);
     s->schid = qemu_get_be16(f);
     s->devno = qemu_get_be16(f);
+    /* Re-assign subch. */
+    if (old_schid != s->schid) {
+        old_s = channel_subsys.css[s->cssid]->sch_set[s->ssid]->sch[old_schid];
+        /*
+         * (old_s != s) means that some other device has its correct
+         * subchannel already assigned (in load).
+         */
+        if (old_s == s) {
+            css_subch_assign(s->cssid, s->ssid, old_schid, s->devno, NULL);
+        }
+        /* It's OK to re-assign without a prior de-assign. */
+        css_subch_assign(s->cssid, s->ssid, s->schid, s->devno, s);
+    }
     s->thinint_active = qemu_get_byte(f);
     /* SCHIB */
     /*     PMCW */

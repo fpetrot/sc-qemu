@@ -488,7 +488,7 @@ static void ahci_reg_init(AHCIState *s)
     s->control_regs.cap = (s->ports - 1) |
                           (AHCI_NUM_COMMAND_SLOTS << 8) |
                           (AHCI_SUPPORTED_SPEED_GEN1 << AHCI_SUPPORTED_SPEED) |
-                          HOST_CAP_NCQ | HOST_CAP_AHCI;
+                          HOST_CAP_NCQ | HOST_CAP_AHCI | HOST_CAP_64;
 
     s->control_regs.impl = (1 << s->ports) - 1;
 
@@ -948,6 +948,7 @@ static void ncq_cb(void *opaque, int ret)
     NCQTransferState *ncq_tfs = (NCQTransferState *)opaque;
     IDEState *ide_state = &ncq_tfs->drive->port.ifs[0];
 
+    ncq_tfs->aiocb = NULL;
     if (ret == -ECANCELED) {
         return;
     }
@@ -1008,6 +1009,7 @@ static void execute_ncq_command(NCQTransferState *ncq_tfs)
                        &ncq_tfs->sglist, BLOCK_ACCT_READ);
         ncq_tfs->aiocb = dma_blk_read(ide_state->blk, &ncq_tfs->sglist,
                                       ncq_tfs->lba << BDRV_SECTOR_BITS,
+                                      BDRV_SECTOR_SIZE,
                                       ncq_cb, ncq_tfs);
         break;
     case WRITE_FPDMA_QUEUED:
@@ -1021,6 +1023,7 @@ static void execute_ncq_command(NCQTransferState *ncq_tfs)
                        &ncq_tfs->sglist, BLOCK_ACCT_WRITE);
         ncq_tfs->aiocb = dma_blk_write(ide_state->blk, &ncq_tfs->sglist,
                                        ncq_tfs->lba << BDRV_SECTOR_BITS,
+                                       BDRV_SECTOR_SIZE,
                                        ncq_cb, ncq_tfs);
         break;
     default:
@@ -1482,6 +1485,18 @@ void ahci_realize(AHCIState *s, DeviceState *qdev, AddressSpace *as, int ports)
 
 void ahci_uninit(AHCIState *s)
 {
+    int i, j;
+
+    for (i = 0; i < s->ports; i++) {
+        AHCIDevice *ad = &s->dev[i];
+
+        for (j = 0; j < 2; j++) {
+            IDEState *s = &ad->port.ifs[j];
+
+            ide_exit(s);
+        }
+    }
+
     g_free(s->dev);
 }
 

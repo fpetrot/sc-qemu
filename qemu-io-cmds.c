@@ -18,7 +18,6 @@
 #include "qemu/error-report.h"
 #include "qemu/main-loop.h"
 #include "qemu/timer.h"
-#include "sysemu/block-backend.h"
 #include "qemu/cutils.h"
 
 #define CMD_NOFILE_OK   0x01
@@ -36,6 +35,13 @@ static int compare_cmdname(const void *a, const void *b)
 
 void qemuio_add_command(const cmdinfo_t *ci)
 {
+    /* ci->perm assumes a file is open, but the GLOBAL and NOFILE_OK
+     * flags allow it not to be, so that combination is invalid.
+     * Catch it now rather than letting it manifest as a crash if a
+     * particular set of command line options are used.
+     */
+    assert(ci->perm == 0 ||
+           (ci->flags & (CMD_FLAG_GLOBAL | CMD_NOFILE_OK)) == 0);
     cmdtab = g_renew(cmdinfo_t, cmdtab, ++ncmds);
     cmdtab[ncmds - 1] = *ci;
     qsort(cmdtab, ncmds, sizeof(*cmdtab), compare_cmdname);
@@ -84,6 +90,29 @@ static int command(BlockBackend *blk, const cmdinfo_t *ct, int argc,
         }
         return 0;
     }
+
+    /* Request additional permissions if necessary for this command. The caller
+     * is responsible for restoring the original permissions afterwards if this
+     * is what it wants. */
+    if (ct->perm && blk_is_available(blk)) {
+        uint64_t orig_perm, orig_shared_perm;
+        blk_get_perm(blk, &orig_perm, &orig_shared_perm);
+
+        if (ct->perm & ~orig_perm) {
+            uint64_t new_perm;
+            Error *local_err = NULL;
+            int ret;
+
+            new_perm = orig_perm | ct->perm;
+
+            ret = blk_set_perm(blk, new_perm, orig_shared_perm, &local_err);
+            if (ret < 0) {
+                error_report_err(local_err);
+                return 0;
+            }
+        }
+    }
+
     optind = 0;
     return ct->cfunc(blk, argc, argv);
 }
@@ -138,15 +167,17 @@ static char **breakline(char *input, int *count)
 
 static int64_t cvtnum(const char *s)
 {
-    char *end;
-    int64_t ret;
+    int err;
+    uint64_t value;
 
-    ret = qemu_strtosz_suffix(s, &end, QEMU_STRTOSZ_DEFSUFFIX_B);
-    if (*end != '\0') {
-        /* Detritus at the end of the string */
-        return -EINVAL;
+    err = qemu_strtosz(s, NULL, &value);
+    if (err < 0) {
+        return err;
     }
-    return ret;
+    if (value > INT64_MAX) {
+        return -ERANGE;
+    }
+    return value;
 }
 
 static void print_cvtnum_err(int64_t rc, const char *arg)
@@ -389,9 +420,15 @@ create_iovec(BlockBackend *blk, QEMUIOVector *qiov, char **argv, int nr_iov,
             goto fail;
         }
 
-        if (len > SIZE_MAX) {
-            printf("Argument '%s' exceeds maximum size %llu\n", arg,
-                   (unsigned long long)SIZE_MAX);
+        if (len > BDRV_REQUEST_MAX_BYTES) {
+            printf("Argument '%s' exceeds maximum size %" PRIu64 "\n", arg,
+                   (uint64_t)BDRV_REQUEST_MAX_BYTES);
+            goto fail;
+        }
+
+        if (count > BDRV_REQUEST_MAX_BYTES - len) {
+            printf("The total number of bytes exceed the maximum size %" PRIu64
+                   "\n", (uint64_t)BDRV_REQUEST_MAX_BYTES);
             goto fail;
         }
 
@@ -484,7 +521,7 @@ static int do_co_pwrite_zeroes(BlockBackend *blk, int64_t offset,
     }
 
     co = qemu_coroutine_create(co_pwrite_zeroes_entry, &data);
-    qemu_coroutine_enter(co);
+    bdrv_coroutine_enter(blk_bs(blk), co);
     while (!data.done) {
         aio_poll(blk_get_aio_context(blk), true);
     }
@@ -504,7 +541,7 @@ static int do_write_compressed(BlockBackend *blk, char *buf, int64_t offset,
         return -ERANGE;
     }
 
-    ret = blk_write_compressed(blk, offset >> 9, (uint8_t *)buf, count >> 9);
+    ret = blk_pwrite_compressed(blk, offset, buf, count);
     if (ret < 0) {
         return ret;
     }
@@ -683,9 +720,9 @@ static int read_f(BlockBackend *blk, int argc, char **argv)
     if (count < 0) {
         print_cvtnum_err(count, argv[optind]);
         return 0;
-    } else if (count > SIZE_MAX) {
+    } else if (count > BDRV_REQUEST_MAX_BYTES) {
         printf("length cannot exceed %" PRIu64 ", given %s\n",
-               (uint64_t) SIZE_MAX, argv[optind]);
+               (uint64_t)BDRV_REQUEST_MAX_BYTES, argv[optind]);
         return 0;
     }
 
@@ -911,6 +948,7 @@ static const cmdinfo_t write_cmd = {
     .name       = "write",
     .altname    = "w",
     .cfunc      = write_f,
+    .perm       = BLK_PERM_WRITE,
     .argmin     = 2,
     .argmax     = -1,
     .args       = "[-bcCfquz] [-P pattern] off len",
@@ -1005,9 +1043,9 @@ static int write_f(BlockBackend *blk, int argc, char **argv)
     if (count < 0) {
         print_cvtnum_err(count, argv[optind]);
         return 0;
-    } else if (count > SIZE_MAX) {
+    } else if (count > BDRV_REQUEST_MAX_BYTES) {
         printf("length cannot exceed %" PRIu64 ", given %s\n",
-               (uint64_t) SIZE_MAX, argv[optind]);
+               (uint64_t)BDRV_REQUEST_MAX_BYTES, argv[optind]);
         return 0;
     }
 
@@ -1086,6 +1124,7 @@ static int writev_f(BlockBackend *blk, int argc, char **argv);
 static const cmdinfo_t writev_cmd = {
     .name       = "writev",
     .cfunc      = writev_f,
+    .perm       = BLK_PERM_WRITE,
     .argmin     = 2,
     .argmax     = -1,
     .args       = "[-Cfq] [-P pattern] off len [len..]",
@@ -1385,6 +1424,7 @@ static int aio_write_f(BlockBackend *blk, int argc, char **argv);
 static const cmdinfo_t aio_write_cmd = {
     .name       = "aio_write",
     .cfunc      = aio_write_f,
+    .perm       = BLK_PERM_WRITE,
     .argmin     = 2,
     .argmax     = -1,
     .args       = "[-Cfiquz] [-P pattern] off len [len..]",
@@ -1549,6 +1589,7 @@ static const cmdinfo_t truncate_cmd = {
     .name       = "truncate",
     .altname    = "t",
     .cfunc      = truncate_f,
+    .perm       = BLK_PERM_WRITE | BLK_PERM_RESIZE,
     .argmin     = 1,
     .argmax     = 1,
     .args       = "off",
@@ -1646,6 +1687,7 @@ static const cmdinfo_t discard_cmd = {
     .name       = "discard",
     .altname    = "d",
     .cfunc      = discard_f,
+    .perm       = BLK_PERM_WRITE,
     .argmin     = 2,
     .argmax     = -1,
     .args       = "[-Cq] off len",
@@ -1956,7 +1998,7 @@ static int reopen_f(BlockBackend *blk, int argc, char **argv)
     qemu_opts_reset(&reopen_opts);
 
     brq = bdrv_reopen_queue(NULL, bs, opts, flags);
-    bdrv_reopen_multiple(brq, &local_err);
+    bdrv_reopen_multiple(bdrv_get_aio_context(bs), brq, &local_err);
     if (local_err) {
         error_report_err(local_err);
     } else {
@@ -2216,6 +2258,7 @@ static const cmdinfo_t help_cmd = {
 
 bool qemuio_command(BlockBackend *blk, const char *cmd)
 {
+    AioContext *ctx;
     char *input;
     const cmdinfo_t *ct;
     char **v;
@@ -2227,7 +2270,10 @@ bool qemuio_command(BlockBackend *blk, const char *cmd)
     if (c) {
         ct = find_command(v[0]);
         if (ct) {
+            ctx = blk ? blk_get_aio_context(blk) : qemu_get_aio_context();
+            aio_context_acquire(ctx);
             done = command(blk, ct, c, v);
+            aio_context_release(ctx);
         } else {
             fprintf(stderr, "command \"%s\" not found\n", v[0]);
         }

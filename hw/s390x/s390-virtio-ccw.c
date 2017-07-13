@@ -63,7 +63,7 @@ static int virtio_ccw_hcall_notify(const uint64_t *args)
     if (!sch || !css_subch_visible(sch)) {
         return -EINVAL;
     }
-    if (queue >= VIRTIO_CCW_QUEUE_MAX) {
+    if (queue >= VIRTIO_QUEUE_MAX) {
         return -EINVAL;
     }
     virtio_queue_notify(virtio_ccw_get_vdev(sch), queue);
@@ -116,7 +116,8 @@ static void ccw_init(MachineState *machine)
     /* get a BUS */
     css_bus = virtual_css_bus_init();
     s390_init_ipl_dev(machine->kernel_filename, machine->kernel_cmdline,
-                      machine->initrd_filename, "s390-ccw.img", true);
+                      machine->initrd_filename, "s390-ccw.img",
+                      "s390-netboot.img", true);
     s390_flic_init();
 
     dev = qdev_create(NULL, TYPE_S390_PCI_HOST_BRIDGE);
@@ -193,6 +194,7 @@ static void ccw_machine_class_init(ObjectClass *oc, void *data)
     S390CcwMachineClass *s390mc = S390_MACHINE_CLASS(mc);
 
     s390mc->ri_allowed = true;
+    s390mc->cpu_model_allowed = true;
     mc->init = ccw_init;
     mc->reset = s390_machine_reset;
     mc->hot_add_cpu = s390_hot_add_cpu;
@@ -249,8 +251,26 @@ bool ri_allowed(void)
 
             return s390mc->ri_allowed;
         }
+        /*
+         * Make sure the "none" machine can have ri, otherwise it won't * be
+         * unlocked in KVM and therefore the host CPU model might be wrong.
+         */
+        return true;
     }
     return 0;
+}
+
+bool cpu_model_allowed(void)
+{
+    MachineClass *mc = MACHINE_GET_CLASS(qdev_get_machine());
+    if (object_class_dynamic_cast(OBJECT_CLASS(mc),
+                                  TYPE_S390_CCW_MACHINE)) {
+        S390CcwMachineClass *s390mc = S390_MACHINE_CLASS(mc);
+
+        return s390mc->cpu_model_allowed;
+    }
+    /* allow CPU model qmp queries with the "none" machine */
+    return true;
 }
 
 static inline void s390_machine_initfn(Object *obj)
@@ -316,6 +336,17 @@ static const TypeInfo ccw_machine_info = {
     }                                                                         \
     type_init(ccw_machine_register_##suffix)
 
+#define CCW_COMPAT_2_8 \
+        HW_COMPAT_2_8 \
+        {\
+            .driver   = TYPE_S390_FLIC_COMMON,\
+            .property = "adapter_routes_max_batch",\
+            .value    = "64",\
+        },
+
+#define CCW_COMPAT_2_7 \
+        HW_COMPAT_2_7
+
 #define CCW_COMPAT_2_6 \
         HW_COMPAT_2_6 \
         {\
@@ -329,7 +360,6 @@ static const TypeInfo ccw_machine_info = {
         },
 
 #define CCW_COMPAT_2_5 \
-        CCW_COMPAT_2_6 \
         HW_COMPAT_2_5
 
 #define CCW_COMPAT_2_4 \
@@ -372,14 +402,41 @@ static const TypeInfo ccw_machine_info = {
             .value    = "0",\
         },
 
+static void ccw_machine_2_9_instance_options(MachineState *machine)
+{
+}
+
+static void ccw_machine_2_9_class_options(MachineClass *mc)
+{
+}
+DEFINE_CCW_MACHINE(2_9, "2.9", true);
+
+static void ccw_machine_2_8_instance_options(MachineState *machine)
+{
+    ccw_machine_2_9_instance_options(machine);
+}
+
+static void ccw_machine_2_8_class_options(MachineClass *mc)
+{
+    ccw_machine_2_9_class_options(mc);
+    SET_MACHINE_COMPAT(mc, CCW_COMPAT_2_8);
+}
+DEFINE_CCW_MACHINE(2_8, "2.8", false);
+
 static void ccw_machine_2_7_instance_options(MachineState *machine)
 {
+    ccw_machine_2_8_instance_options(machine);
 }
 
 static void ccw_machine_2_7_class_options(MachineClass *mc)
 {
+    S390CcwMachineClass *s390mc = S390_MACHINE_CLASS(mc);
+
+    s390mc->cpu_model_allowed = false;
+    ccw_machine_2_8_class_options(mc);
+    SET_MACHINE_COMPAT(mc, CCW_COMPAT_2_7);
 }
-DEFINE_CCW_MACHINE(2_7, "2.7", true);
+DEFINE_CCW_MACHINE(2_7, "2.7", false);
 
 static void ccw_machine_2_6_instance_options(MachineState *machine)
 {
