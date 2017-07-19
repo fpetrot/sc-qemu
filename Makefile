@@ -632,7 +632,6 @@ ifdef CONFIG_RABBITS
 	$(INSTALL_DIR) "$(DESTDIR)$(includedir)/sc-qemu"
 	$(INSTALL_DIR) "$(DESTDIR)$(includedir)/sc-qemu/target"
 	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/sc-qemu.h "$(DESTDIR)$(includedir)/sc-qemu"
-	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/sc-qemu-char-dev.h "$(DESTDIR)$(includedir)/sc-qemu"
 	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/sc-object.h "$(DESTDIR)$(includedir)/sc-qemu"
 	$(INSTALL_DATA) $(SRC_PATH)/sc-qemu/typedefs.h "$(DESTDIR)$(includedir)/sc-qemu"
 endif
