@@ -7,8 +7,10 @@
 #include "hw/sysbus.h"
 #include "exec/address-spaces.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/cpus.h"
 #include "exec/gdbstub.h"
 #include "qapi/error.h"
+#include "qom/cpu.h"
 
 #include "sc-qemu.h"
 #include "qemu-context-priv.h"
@@ -45,50 +47,24 @@ static uint64_t sc_mmio_read(void *opaque, hwaddr offset,
                            unsigned size)
 {
     mmio_ctx *ctx = (mmio_ctx*) opaque;
-#ifdef SYNCHRONOUS_IO
     sc_qemu_io_attr attr;
 
     attr.cpuid = current_cpu->cpu_index;
 
     return ctx->qemu_ctx->sysc.read(ctx->qemu_ctx->opaque,
                                     ctx->base + offset, size, &attr);
-#else
-    qemu_context *qctx = ctx->qemu_ctx;
-
-    qctx->main_status = MAIN_MMIO_READ;
-    qctx->mmio_addr = ctx->base + offset;
-    qctx->mmio_size = size;
-    qctx->mmio_attr.cpuid = current_cpu->cpu_index;
-
-    qemu_cpu_cond_wait(&qctx->io_cond);
-
-    return qctx->mmio_value;
-#endif
-
 }
 
 static void sc_mmio_write(void *opaque, hwaddr offset,
                         uint64_t value, unsigned size)
 {
     mmio_ctx *ctx = (mmio_ctx*) opaque;
-#ifdef SYNCHRONOUS_IO
     sc_qemu_io_attr attr;
 
     attr.cpuid = current_cpu->cpu_index;
 
     ctx->qemu_ctx->sysc.write(ctx->qemu_ctx->opaque,
                               ctx->base + offset, value, size, &attr);
-#else
-    qemu_context *qctx = ctx->qemu_ctx;
-
-    qctx->main_status = MAIN_MMIO_WRITE;
-    qctx->mmio_addr = ctx->base + offset;
-    qctx->mmio_value = value;
-    qctx->mmio_size = size;
-    qctx->mmio_attr.cpuid = current_cpu->cpu_index;
-
-    qemu_cpu_cond_wait(&qctx->io_cond);
-#endif
 }
 
 static const MemoryRegionOps sc_mmio_ops = {
@@ -166,60 +142,30 @@ static void sc_qemu_start_gdbserver(qemu_context *ctx, const char *port)
     qemu_system_debug_request();
 }
 
-static void deadline_cb(void *opaque)
-{
-    qemu_context *ctx = (qemu_context *) opaque;
-
-    timer_mod(ctx->deadline, qemu_clock_get_ns(ctx->limiter_clock) + ctx->max_run_time_ns);
-}
-
-
 static qemu_context *main_thread_ctx = NULL;
 
-static void do_one_main_loop(qemu_context *ctx)
+static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed)
 {
     int64_t before;
-    static int last_io = 0;
 
     main_thread_ctx = ctx;
 
     if (!qemu_mutex_iothread_locked()) {
         /* This is the first time we are called */
+        qemu_thread_get_self(first_cpu->thread);
         qemu_mutex_lock_iothread();
-        vm_start();
     }
 
     ctx->main_status = MAIN_OK;
-    before = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-
-    last_io = main_loop_wait(last_io > 0);
-
-    ctx->last_elapsed = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - before;
-}
-
-static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed)
-{
-    do {
-        do_one_main_loop(ctx);
-
-        switch (ctx->main_status) {
-        case MAIN_MMIO_READ:
-            ctx->mmio_value = ctx->sysc.read(ctx->opaque, ctx->mmio_addr,
-                                             ctx->mmio_size, &ctx->mmio_attr);
-            qemu_cond_signal(&ctx->io_cond);
-            break;
-        case MAIN_MMIO_WRITE:
-            ctx->sysc.write(ctx->opaque, ctx->mmio_addr, ctx->mmio_value,
-                            ctx->mmio_size, &ctx->mmio_attr);
-            qemu_cond_signal(&ctx->io_cond);
-            break;
-        default:
-            break;
-        }
-    } while (ctx->main_status > MAIN_ABORT);
 
     if (elapsed) {
-        *elapsed = ctx->last_elapsed;
+        before = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    }
+
+    qemu_coroutine_enter(first_cpu->coroutine);
+
+    if (elapsed) {
+        *elapsed = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - before;
     }
 
     return (ctx->main_status != MAIN_OK) || main_loop_should_exit();
@@ -261,22 +207,25 @@ static void init_q_import(qemu_import *q_import)
 
 static void setup_limiter_timer(sc_qemu_init_struct *s, qemu_context *ctx)
 {
-    if (s->max_run_time > 0) {
-        /* Limit the number of instructions QEMU executes when calling the main loop */
-        ctx->limiter_clock = QEMU_CLOCK_VIRTUAL;
-        ctx->max_run_time_ns = s->max_run_time;
-    } else {
-        /* Limit the time we can last into the main loop */
-        ctx->limiter_clock = QEMU_CLOCK_HOST;
-        ctx->max_run_time_ns = SCALE_MS >> 7; /* XXX not sure how to calibrate this value */
-    }
+    const int64_t max_run_time = s->max_run_time ? s->max_run_time : SCALE_MS;
 
-    ctx->deadline = timer_new_ns(ctx->limiter_clock, deadline_cb, ctx);
-    timer_mod(ctx->deadline, qemu_clock_get_ns(ctx->limiter_clock) + ctx->max_run_time_ns);
+    /* Limit the time we can last into the main loop.
+     * Default to 1ms if not specified. */
+    qemu_tcg_set_kick_period(max_run_time);
 }
 
 
 int qemu_main(int argc, char const * argv[], char **envp);
+
+static void * qemu_io_thread(void *arg)
+{
+    qemu_mutex_lock_iothread();
+    do {
+        main_loop_wait(false);
+    } while(!main_loop_should_exit());
+
+    return NULL;
+}
 
 qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 {
@@ -290,7 +239,6 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
         "-accel", "tcg,thread=single",
         /*"-d", "in_asm,cpu,exec",*/
         /*"-D", "qemu.log",*/
-        "-S",
     };
 
     char icount_option[] = "shift=00,align=off";
@@ -326,7 +274,8 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
         ctx->root_mr = get_system_memory();
     }
 
-    qemu_cond_init(&ctx->io_cond);
+    QemuThread *main_thread = g_malloc0(sizeof(QemuThread));
+    qemu_thread_create(main_thread, "io-thread", qemu_io_thread, NULL, QEMU_THREAD_JOINABLE);
 
     qemu_mutex_unlock_iothread();
     return ctx;
@@ -342,30 +291,33 @@ void sc_qemu_do_register_ctor(ctor_fn f)
     ctor_count++;
 }
 
-static QEMU_NORETURN void main_thread_abort(void)
+void QEMU_NORETURN __real_exit(int status);
+void QEMU_NORETURN __wrap_abort(void);
+void QEMU_NORETURN __wrap_exit(int status);
+
+static QEMU_NORETURN void main_thread_abort(enum ScQemuMainLoopStatus s)
 {
-    for (;;) {
-        /* FIXME */
-        qemu_cpu_cond_wait(&main_thread_ctx->io_cond);
+    if (current_cpu && qemu_coroutine_self() == current_cpu->coroutine) {
+        main_thread_ctx->main_status = s;
+        qemu_coroutine_yield();
     }
+
+    fprintf(stderr, "Internal QEMU error. Cannot continue\n");
+    __real_exit(1);
 }
 
-void QEMU_NORETURN __wrap_abort(void);
 void QEMU_NORETURN __wrap_abort(void)
 {
-    main_thread_ctx->main_status = MAIN_ABORT;
-    main_thread_abort();
+    main_thread_abort(MAIN_ABORT);
 }
 
-void QEMU_NORETURN __wrap_exit(int status);
 void QEMU_NORETURN __wrap_exit(int status)
 {
     if (!status) {
-        main_thread_ctx->main_status = MAIN_EXIT;
+        main_thread_abort(MAIN_EXIT);
     } else {
-        main_thread_ctx->main_status = MAIN_ABORT;
+        main_thread_abort(MAIN_ABORT);
     }
 
-    main_thread_abort();
 }
 

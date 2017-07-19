@@ -26,6 +26,7 @@
 #define QEMU_MAIN_LOOP_H
 
 #include "block/aio.h"
+#include "qemu/coroutine.h"
 
 #define SIG_IPI SIGUSR1
 
@@ -285,7 +286,5 @@ void qemu_fd_register(int fd);
 
 QEMUBH *qemu_bh_new(QEMUBHFunc *cb, void *opaque);
 void qemu_bh_schedule_idle(QEMUBH *bh);
-
-void qemu_cpu_cond_wait(QemuCond *cond);
 
 #endif

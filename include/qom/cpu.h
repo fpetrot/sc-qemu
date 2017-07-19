@@ -27,6 +27,7 @@
 #include "qemu/bitmap.h"
 #include "qemu/queue.h"
 #include "qemu/thread.h"
+#include "qemu/coroutine.h"
 
 typedef int (*WriteCoreDumpFunction)(const void *buf, size_t size,
                                      void *opaque);
@@ -315,6 +316,7 @@ struct CPUState {
     int numa_node;
 
     struct QemuThread *thread;
+    Coroutine *coroutine;
 #ifdef _WIN32
     HANDLE hThread;
 #endif

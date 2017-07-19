@@ -4,6 +4,7 @@
 #include "sysemu/sysemu.h"
 #include "qemu/typedefs.h"
 #include "qemu/thread.h"
+#include "qemu/coroutine.h"
 
 #include "sc-qemu.h"
 
@@ -19,21 +20,11 @@ struct qemu_context {
     void *opaque;
     systemc_import sysc;
 
-    QEMUClockType limiter_clock;
     int64_t max_run_time_ns;
-    QEMUTimer *deadline;
 
     MemoryRegion *root_mr;
 
     enum ScQemuMainLoopStatus main_status;
-    int64_t last_elapsed;
-    QemuCond io_cond;
-
-    /* MMIO */
-    uint64_t mmio_addr;
-    uint64_t mmio_value;
-    unsigned mmio_size;
-    sc_qemu_io_attr mmio_attr;
 };
 
 #endif
