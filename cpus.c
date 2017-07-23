@@ -884,6 +884,7 @@ static void stop_tcg_kick_timer(void)
 {
     if (tcg_kick_vcpu_timer) {
         timer_del(tcg_kick_vcpu_timer);
+        timer_free(tcg_kick_vcpu_timer);
         tcg_kick_vcpu_timer = NULL;
     }
 }
