@@ -57,13 +57,16 @@ void os_setup_early_signal_handling(void)
     sigaction(SIGPIPE, &act, NULL);
 }
 
+#ifndef CONFIG_RABBITS
 static void termsig_handler(int signal, siginfo_t *info, void *c)
 {
     qemu_system_killed(info->si_signo, info->si_pid);
 }
+#endif
 
 void os_setup_signal_handling(void)
 {
+#ifndef CONFIG_RABBITS
     struct sigaction act;
 
     memset(&act, 0, sizeof(act));
@@ -72,6 +75,7 @@ void os_setup_signal_handling(void)
     sigaction(SIGINT,  &act, NULL);
     sigaction(SIGHUP,  &act, NULL);
     sigaction(SIGTERM, &act, NULL);
+#endif
 }
 
 /* Find a likely location for support files using the location of the binary.
