@@ -873,7 +873,13 @@ static void kick_tcg_thread(void *opaque)
 
 static void start_tcg_kick_timer(void)
 {
+#ifdef CONFIG_RABBITS
+    /* When building sc-qemu, we want to be preempted even when there is only
+     * one CPU */
+    if (!mttcg_enabled && !tcg_kick_vcpu_timer) {
+#else
     if (!mttcg_enabled && !tcg_kick_vcpu_timer && CPU_NEXT(first_cpu)) {
+#endif
         tcg_kick_vcpu_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                            kick_tcg_thread, NULL);
         timer_mod(tcg_kick_vcpu_timer, qemu_tcg_next_kick());
