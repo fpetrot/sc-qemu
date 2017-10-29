@@ -144,7 +144,28 @@ static void sc_qemu_start_gdbserver(qemu_context *ctx, const char *port)
 
 static qemu_context *main_thread_ctx = NULL;
 
-static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed)
+static bool qemu_has_work(void)
+{
+    CPUState *cpu;
+
+    if (qemu_clock_deadline_ns_all(QEMU_CLOCK_VIRTUAL) != -1) {
+        return true;
+    }
+
+    CPU_FOREACH(cpu) {
+        if (cpu_is_stopped(cpu)) {
+            continue;
+        }
+
+        if (!cpu->halted || cpu_has_work(cpu)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed, bool *has_work)
 {
     int64_t before;
 
@@ -166,6 +187,10 @@ static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed)
 
     if (elapsed) {
         *elapsed = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - before;
+    }
+
+    if (has_work) {
+        *has_work = qemu_has_work();
     }
 
     return (ctx->main_status != MAIN_OK) || main_loop_should_exit();
