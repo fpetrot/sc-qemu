@@ -46,5 +46,6 @@ typedef void (*sc_qemu_object_gpio_register_cb_fn)(sc_qemu_object *obj, const ch
                                                    sc_qemu_object_gpio_cb_fn cb, void *opaque);
 
 typedef int (*sc_qemu_cpu_get_id_fn)(sc_qemu_object *obj);
+typedef sc_qemu_object* (*sc_qemu_object_get_root_mr_fn)(qemu_context *ctx);
 
 #endif

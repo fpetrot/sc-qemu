@@ -22,4 +22,6 @@ void sc_qemu_object_gpio_register_cb(sc_qemu_object *obj, const char *gpio_name,
                                      sc_qemu_object_gpio_cb_fn cb, void *opaque);
 
 int sc_qemu_cpu_get_id(sc_qemu_object *obj);
+sc_qemu_object * sc_qemu_object_get_root_mr(qemu_context *ctx);
+
 #endif

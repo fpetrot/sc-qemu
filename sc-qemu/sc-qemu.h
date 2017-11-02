@@ -36,8 +36,8 @@ struct qemu_import {
     sc_qemu_object_gpio_update_fn       object_gpio_update;       /* < Set the value of a input gpio */
     sc_qemu_object_gpio_register_cb_fn  object_gpio_register_cb;  /* < Register a callback on out gpio value change */
 
-    sc_qemu_cpu_get_id_fn               cpu_get_id;               /* < Get the CPU id of the corresponding
-                                                                       sc_qemu_object */
+    sc_qemu_cpu_get_id_fn               cpu_get_id;               /* < Get the CPU id of the corresponding sc_qemu_object */
+    sc_qemu_object_get_root_mr_fn       object_get_root_mr;       /* < Get the root MemoryRegion as an sc_qemu_object */
 };
 
 struct systemc_import {

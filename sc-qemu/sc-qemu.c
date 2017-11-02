@@ -101,7 +101,8 @@ static MemoryRegion* map_io(qemu_context *ctx, MemoryRegion *root, uint64_t base
 static void sc_qemu_map_io(qemu_context *ctx, uint32_t base_address,
                            uint32_t size)
 {
-    map_io(ctx, ctx->root_mr, base_address, size);
+    MemoryRegion *mr = MEMORY_REGION(ctx->root_mr.obj);
+    map_io(ctx, mr, base_address, size);
 }
 
 static void sc_qemu_map_dmi(qemu_context *ctx, uint32_t base_address,
@@ -229,6 +230,7 @@ static void init_q_import(qemu_import *q_import)
     q_import->object_gpio_update = sc_qemu_object_gpio_update;
     q_import->object_gpio_register_cb = sc_qemu_object_gpio_register_cb;
     q_import->cpu_get_id = sc_qemu_cpu_get_id;
+    q_import->object_get_root_mr = sc_qemu_object_get_root_mr;
 }
 
 static void setup_limiter_timer(sc_qemu_init_struct *s, qemu_context *ctx)
@@ -294,10 +296,11 @@ qemu_context* SC_QEMU_INIT_SYM(sc_qemu_init_struct *s)
 
     setup_limiter_timer(s, ctx);
 
+    ctx->root_mr.ctx = ctx;
     if (s->map_whole_as) {
-        ctx->root_mr = map_io(ctx, get_system_memory(), 0, ((uint64_t)UINT32_MAX)+1);
+        ctx->root_mr.obj = OBJECT(map_io(ctx, get_system_memory(), 0, ((uint64_t)UINT32_MAX)+1));
     } else {
-        ctx->root_mr = get_system_memory();
+        ctx->root_mr.obj = OBJECT(get_system_memory());
     }
 
     QemuThread *main_thread = g_malloc0(sizeof(QemuThread));

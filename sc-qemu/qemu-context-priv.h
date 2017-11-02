@@ -7,6 +7,7 @@
 #include "qemu/coroutine.h"
 
 #include "sc-qemu.h"
+#include "sc-object-priv.h"
 
 enum ScQemuMainLoopStatus {
     MAIN_OK,
@@ -22,7 +23,7 @@ struct qemu_context {
 
     int64_t max_run_time_ns;
 
-    MemoryRegion *root_mr;
+    sc_qemu_object root_mr;
 
     enum ScQemuMainLoopStatus main_status;
 };
