@@ -223,6 +223,7 @@ static void init_q_import(qemu_import *q_import)
     q_import->object_property_set_bool = sc_qemu_object_property_set_bool;
     q_import->object_property_set_int = sc_qemu_object_property_set_int;
     q_import->object_property_set_str = sc_qemu_object_property_set_str;
+    q_import->object_property_set_link = sc_qemu_object_property_set_link;
     q_import->object_mmio_map = sc_qemu_object_mmio_map;
     q_import->object_gpio_connect = sc_qemu_object_gpio_connect;
     q_import->object_gpio_update = sc_qemu_object_gpio_update;

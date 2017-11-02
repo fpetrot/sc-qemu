@@ -8,6 +8,7 @@ sc_qemu_object* sc_qemu_object_new(qemu_context *ctx, const char *type_name);
 void sc_qemu_object_property_set_bool(sc_qemu_object *obj, bool val, const char *name);
 void sc_qemu_object_property_set_int(sc_qemu_object *obj, int64_t val, const char *name);
 void sc_qemu_object_property_set_str(sc_qemu_object *obj, const char *val, const char *name);
+void sc_qemu_object_property_set_link(sc_qemu_object *obj, sc_qemu_object *link, const char *name);
 
 void sc_qemu_object_mmio_map(sc_qemu_object *obj, int mmio_id, uint32_t addr);
 

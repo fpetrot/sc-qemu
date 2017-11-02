@@ -85,6 +85,19 @@ void sc_qemu_object_property_set_str(sc_qemu_object *obj, const char *val, const
     unlock_iothread(was_locked);
 }
 
+void sc_qemu_object_property_set_link(sc_qemu_object *obj, sc_qemu_object *link, const char *name)
+{
+    Object *o = obj->obj;
+
+    bool was_locked = qemu_mutex_iothread_locked();
+    lock_iothread(was_locked);
+
+    assert(object_property_find(o, name, NULL));
+    object_property_set_link(o, link->obj, name, &error_abort);
+
+    unlock_iothread(was_locked);
+}
+
 int sc_qemu_cpu_get_id(sc_qemu_object *obj)
 {
     CPUState *cpu = (CPUState*) object_dynamic_cast(obj->obj, TYPE_CPU);

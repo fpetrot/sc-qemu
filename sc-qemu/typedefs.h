@@ -30,6 +30,7 @@ typedef sc_qemu_object* (*sc_qemu_object_new_fn)(qemu_context *ctx, const char *
 typedef void (*sc_qemu_object_property_set_bool_fn)(sc_qemu_object *obj, bool val, const char *name);
 typedef void (*sc_qemu_object_property_set_int_fn)(sc_qemu_object *obj, int64_t val, const char *name);
 typedef void (*sc_qemu_object_property_set_str_fn)(sc_qemu_object *obj, const char * val, const char *name);
+typedef void (*sc_qemu_object_property_set_link_fn)(sc_qemu_object *obj, sc_qemu_object * link, const char *name);
 
 typedef void (*sc_qemu_object_mmio_map_fn)(sc_qemu_object *obj, int mmio_id, uint32_t addr);
 

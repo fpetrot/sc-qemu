@@ -29,6 +29,8 @@ struct qemu_import {
     sc_qemu_object_property_set_bool_fn object_property_set_bool; /* < Set a bool property on object */
     sc_qemu_object_property_set_int_fn  object_property_set_int;  /* < Set a int property on object */
     sc_qemu_object_property_set_str_fn  object_property_set_str;  /* < Set a string property on object */
+    sc_qemu_object_property_set_link_fn object_property_set_link; /* < Set a link property on an object */
+
     sc_qemu_object_mmio_map_fn          object_mmio_map;          /* < Map a qdev memory area */
     sc_qemu_object_gpio_connect_fn      object_gpio_connect;      /* < Connect two gpios together */
     sc_qemu_object_gpio_update_fn       object_gpio_update;       /* < Set the value of a input gpio */
