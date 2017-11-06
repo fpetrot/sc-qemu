@@ -33,6 +33,7 @@
 #include "sysemu/sysemu.h"
 #include "sysemu/hw_accel.h"
 #include "kvm_arm.h"
+#include "hw/arm/armv7m_nvic.h"
 
 static void arm_cpu_set_pc(CPUState *cs, vaddr value)
 {
@@ -547,6 +548,12 @@ static void arm_cpu_initfn(Object *obj)
             arm_translate_init();
         }
     }
+
+    object_property_add_link(obj, "nvic", TYPE_NVIC,
+                             (Object **) &cpu->env.nvic,
+                             object_property_allow_set_link,
+                             OBJ_PROP_LINK_UNREF_ON_RELEASE,
+                             &error_abort);
 }
 
 static Property arm_cpu_reset_cbar_property =
