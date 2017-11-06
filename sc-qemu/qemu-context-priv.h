@@ -21,6 +21,8 @@ struct qemu_context {
     void *opaque;
     systemc_import sysc;
 
+    bool elaboration_done;
+
     int64_t max_run_time_ns;
 
     sc_qemu_object root_mr;

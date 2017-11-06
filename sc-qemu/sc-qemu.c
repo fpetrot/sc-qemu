@@ -49,6 +49,11 @@ static uint64_t sc_mmio_read(void *opaque, hwaddr offset,
     mmio_ctx *ctx = (mmio_ctx*) opaque;
     sc_qemu_io_attr attr;
 
+    if (!ctx->qemu_ctx->elaboration_done) {
+        /* Ignore reads while elaboration is ongoing */
+        return 0;
+    }
+
     attr.cpuid = current_cpu->cpu_index;
 
     return ctx->qemu_ctx->sysc.read(ctx->qemu_ctx->opaque,
@@ -60,6 +65,11 @@ static void sc_mmio_write(void *opaque, hwaddr offset,
 {
     mmio_ctx *ctx = (mmio_ctx*) opaque;
     sc_qemu_io_attr attr;
+
+    if (!ctx->qemu_ctx->elaboration_done) {
+        /* Ignore writes while elaboration is ongoing */
+        return;
+    }
 
     attr.cpuid = current_cpu->cpu_index;
 
@@ -174,6 +184,7 @@ static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed, bool *has_work
 
     if (!qemu_mutex_iothread_locked()) {
         /* This is the first time we are called */
+        ctx->elaboration_done = true;
         qemu_thread_get_self(first_cpu->thread);
         qemu_mutex_lock_iothread();
     }
