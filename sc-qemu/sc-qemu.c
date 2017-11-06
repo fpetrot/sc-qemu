@@ -186,6 +186,7 @@ static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed, bool *has_work
         /* This is the first time we are called */
         ctx->elaboration_done = true;
         qemu_thread_get_self(first_cpu->thread);
+        qemu_system_reset(false);
         qemu_mutex_lock_iothread();
     }
 

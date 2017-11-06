@@ -29,6 +29,16 @@ static inline void unlock_iothread(bool was_locked)
     }
 }
 
+/* XXX Not sure how to do that properly */
+static void register_reset(Object *obj)
+{
+    if (object_dynamic_cast(obj, TYPE_CPU)) {
+        qemu_register_reset((void (*)(void*))cpu_reset, obj);
+    } else if (object_dynamic_cast(obj, TYPE_DEVICE)) {
+        qemu_register_reset(qdev_reset_all_fn, obj);
+    }
+}
+
 sc_qemu_object * sc_qemu_object_new(qemu_context *ctx, const char *typename)
 {
     sc_qemu_object *ret = NULL;
@@ -40,6 +50,9 @@ sc_qemu_object * sc_qemu_object_new(qemu_context *ctx, const char *typename)
     lock_iothread(was_locked);
 
     ret->obj = object_new(typename);
+    object_property_add_child(object_get_root(), "sc-qemu-object[*]", ret->obj, &error_abort);
+
+    register_reset(ret->obj);
 
     unlock_iothread(was_locked);
 
