@@ -214,8 +214,17 @@ static void arm_cpu_reset(CPUState *s)
              * it got copied into memory. In the latter case, rom_ptr
              * will return a NULL pointer and we should use ldl_phys instead.
              */
+#if 0
             initial_msp = ldl_phys(s->as, 0);
             initial_pc = ldl_phys(s->as, 4);
+#else
+            /* FIXME: Quick and dirty hack to avoid access to memory while the memory
+             * is not yet realized and loaded with the code to execute
+             * This is supposed to last the blink of an eye
+             */
+            initial_msp = 0x2000f000;
+            initial_pc = 0x00000008;
+#endif
         }
 
         env->regs[13] = initial_msp & 0xFFFFFFFC;
