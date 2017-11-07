@@ -22,6 +22,7 @@ struct qemu_context {
     systemc_import sysc;
 
     bool elaboration_done;
+    bool debug_requested;
 
     int64_t max_run_time_ns;
 
