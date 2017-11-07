@@ -151,13 +151,18 @@ static void sc_qemu_start_gdbserver(qemu_context *ctx, const char *port)
 {
     gdbserver_start(port);
     qemu_system_debug_request();
+    ctx->debug_requested = true;
 }
 
 static qemu_context *main_thread_ctx = NULL;
 
-static bool qemu_has_work(void)
+static bool qemu_has_work(qemu_context *ctx)
 {
     CPUState *cpu;
+
+    if (ctx->debug_requested) {
+        return true;
+    }
 
     if (qemu_clock_deadline_ns_all(QEMU_CLOCK_VIRTUAL) != -1) {
         return true;
@@ -182,13 +187,14 @@ static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed, bool *has_work
 
     main_thread_ctx = ctx;
 
-    if (!qemu_mutex_iothread_locked()) {
+    if (!ctx->elaboration_done) {
         /* This is the first time we are called */
         ctx->elaboration_done = true;
         qemu_thread_get_self(first_cpu->thread);
         qemu_system_reset(false);
-        qemu_mutex_lock_iothread();
     }
+
+    qemu_mutex_lock_iothread();
 
     ctx->main_status = MAIN_OK;
 
@@ -203,8 +209,10 @@ static bool sc_qemu_cpu_loop(qemu_context *ctx, int64_t *elapsed, bool *has_work
     }
 
     if (has_work) {
-        *has_work = qemu_has_work();
+        *has_work = qemu_has_work(ctx);
     }
+
+    qemu_mutex_unlock_iothread();
 
     return (ctx->main_status != MAIN_OK) || main_loop_should_exit();
 }
