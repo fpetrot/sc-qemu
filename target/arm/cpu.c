@@ -223,7 +223,7 @@ static void arm_cpu_reset(CPUState *s)
              * This is supposed to last the blink of an eye
              */
             initial_msp = 0x2000f000;
-            initial_pc = 0x00000008;
+            initial_pc = 0x00000009;
 #endif
         }
 
