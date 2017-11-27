@@ -4,4 +4,4 @@ trigger_build:
   stage: deploy
   script:
     - GITLAB_INSTANCE=${CI_PROJECT_URL/"$CI_PROJECT_PATH"/}
-    - curl -X POST -F token=$RABBITS_DEV_TRIGGER -F ref=master ${GITLAB_INSTANCE}/api/v3/projects/${RABBITS_DEV_ID}/trigger/builds
+    - curl -X POST -F token=$RABBITS_DEV_TRIGGER -F ref=master ${GITLAB_INSTANCE}/api/v4/projects/${RABBITS_DEV_ID}/trigger/pipeline
